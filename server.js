@@ -3,6 +3,7 @@ const cors = require('cors')
 const dotenv = require('dotenv')
 const OpenAI = require('openai')
 const Prompt = require('./prompt')
+const { default: axios } = require('axios')
 
 dotenv.config()
 
@@ -12,12 +13,27 @@ const PORT = 8000;
 app.use(express.json())
 app.use(cors())
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const client = new OpenAI({apiKey:process.env.OPENAI_API_KEY});
+
+const AGENTS = {
+    get_flight_information:{
+        name:"Alice (Flight Agent)",
+        endpoint:""
+    },
+    get_accomodation:{
+        name:"Bob (Accomodation Agent)",
+        endpoint:""
+    },
+    get_sightSeeing:{
+        name:"Charlie (Sightseeing Agent)",
+        endpoint:""
+    }
+} 
 
 const tools = [{
     type:"function",
-    name: "get_flight_Information",
-    description:"Get flight information based on user input",
+    name: "get_flight_information",
+    description:"Get flight information from Alice (Flight Agent) based on user input",
     parameters:{
         type:"object",
         properties:{
@@ -42,7 +58,7 @@ const tools = [{
             number_of_passengers:{
                 type:"integer",
                 description:"The number of passengers for the flight"
-            }
+            },
         },
         required:["departure_location", "destination", "departure_date", "flight_type", "number_of_passengers"],
         additionalProperties:false
@@ -53,12 +69,13 @@ const tools = [{
 {
     type:"function",
     name:"get_accomodation",
-    description:"Helps with list of accomodations at user destination location",
+    description:"Get accommodation options from Bob (Accommodation Agent) at user destination location",
     parameters:{
         type:"object",
         properties:{
             destination:{
                 type:"string",
+                description: "The destination city or location for accommodation",
             }
         },
         required:["destination"],
@@ -69,23 +86,48 @@ const tools = [{
 {
     type:"function",
     name:"get_sightSeeing",
-    description:"Helps with sight-seeing recommendation based on user destination location",
+    description:"Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
     parameters:{
         type:"object",
         properties:{
             destination:{
                 type:"string",
-            }
+                description:"The destination city or location for sightseeing recommendations",
+            },
         },
         required:['destination'],
         additionalProperties:false
     }
-
 }
-
 ]
 
-app.post("/mother-api", async (req,res) => {
+async function callAgentApi (toolName, parameters){
+    try{
+        const agent = AGENTS[toolName]
+
+        if(!agent){
+            throw new Error (`No agent defined for tool :${toolName}`)
+        }
+        console.log(`Calling ${agent.name} for information...`);
+
+        const response = await axios.post(agent.endpoint, parameters);
+
+        return {
+            agent:agent.name,
+            ...response.data
+        }
+    }catch(error){
+        console.error(`Error calling ${AGENTS[toolName]?.name || toolName}, API:`, error.message)
+        return{
+            agent:AGENTS[toolName]?.name || toolName,
+            error:`Failed to get data from ${AGENTS[toolName]?.name || toolName}`,
+            message:error.message
+        }
+    }
+}
+
+app.post("/mother", async (req,res) => {
+    try{
     const userMessage = req.body;
 
     const completion = await client.chat.completions.create({
@@ -103,8 +145,51 @@ app.post("/mother-api", async (req,res) => {
         tool_choice:"auto",
     })
 
-    const reply = completion.choices[0]?.message?.content;
-    res.status(200).json({ reply });
+    let reply = completion.choices[0]?.message?.content;
+    let toolResults=[]
+
+    if(reply.tool_calls && assistantResponse.tool_calls.length > 0){
+        for (const toolCall of reply.tool_calls){
+            const functionName = toolCall.function.name;
+            const functionArgs = JSON.parse(toolCall.function.arguments);
+            const agentName = AGENTS[toolName]?.name || toolName;
+
+            console.log(`Calling ${agentName} with args:`, functionArgs)
+
+            const functionResult = await callAgentApi(functionName, functionArgs)
+            toolResults.push({   
+                agent: agentName,
+                toolCall:toolCall,
+                result: functionResult
+        });
+
+
+        messages.push(reply)
+        message.push({
+            role:"tool",
+            tool_call_id:toolCall.id,
+            name:functionName,
+            content:JSON.stringify(functionResult)
+        })
+        }
+
+        const response2 = await openai.responses.create({
+            model:"gpt-4-turbo",
+            messages:messages
+        });
+
+        reply = secondCompletion.choices[0].message;
+    } 
+
+    res.send (200).json({
+        reply,
+        toolResults: toolResults.length > 0 ? toolResults : undefined 
+    });
+}catch(error){
+    console.error("Error:", error);
+    res.status(500).json({error: "An error occurred while processing your request", details: error.message})
+}
+
 });
 
 app.listen(PORT, () =>{
