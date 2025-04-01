@@ -1,0 +1,5 @@
+const express = require('express')
+const cors = require('cors')
+const dotenv = require('dotenv')
+const openai = require('openai')
+const Prompt = require('./prompt')
