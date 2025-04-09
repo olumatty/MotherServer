@@ -4,7 +4,7 @@ const dotenv = require('dotenv')
 const OpenAI = require('openai')
 const Prompt = require('./prompt')
 const { default: axios } = require('axios')
-const { Sessions } = require('openai/resources/beta/realtime/sessions.mjs')
+const getIataCodeFromCity = require('./iata')
 
 dotenv.config()
 
@@ -15,8 +15,6 @@ app.use(express.json())
 app.use(cors())
 
 const client = new OpenAI({apiKey:process.env.OPENAI_API_KEY});
-
-const sessions = {};
 
 //Define Agents
 const AGENTS = {
@@ -30,7 +28,7 @@ const AGENTS = {
     },
     get_sightSeeing:{
         name:"Charlie (Sightseeing Agent)",
-        endpoint:"http://localhost:8003/sight_seeeing"
+        endpoint:"http://localhost:8003/sight_seeing"
     }
 } 
 
@@ -46,11 +44,11 @@ const tools = [
                 properties: {
                     departure_location: {
                         type: "string",
-                        description: "The location or airport where the flight is departing from (e.g., BOM, DEL,NYK).airport"
+                        description: "The location or airport where the flight is departing from (e.g. BOM, DEL, LOS, DXB, NYK).airport"
                     },
                     destination: {
                         type: "string",
-                        description: "The destination city or airport (e.g., London).airport",
+                        description: "The destination city or airport (e.g. BOM, DEL, LOS, DXB, NYK ).airport",
                     },
                     departure_date: {
                         type: "string",
@@ -60,7 +58,7 @@ const tools = [
                     flight_type: {
                         type: "string",
                         enum: ["Economy", "business-class"],
-                        description: "The type of flight: one-way or round-trip"
+                        description: "The type of flight: (Economy, business-class or first-class)"
                     },
                     number_of_passengers: {
                         type: "integer",
@@ -120,7 +118,16 @@ async function callAgentApi(toolName, parameters){
         }
         console.log(`Calling ${agent.name} for information...`);
 
-        const response = await axios.post(agent.endpoint, parameters);
+        let response;
+
+    
+        if (toolName === "get_accomodation" || toolName === "get_sightSeeing") {
+            response = await axios.get(agent.endpoint, {
+                params: parameters
+            });
+        } else {
+            response = await axios.post(agent.endpoint, parameters);
+        }
 
         return {
             agent: agent.name,
@@ -185,16 +192,48 @@ app.post("/mother", async (req,res) => {
                 const functionName = toolCall.function.name;
                 const functionArgs = JSON.parse(toolCall.function.arguments);
                 const agentName = AGENTS[functionName]?.name || functionName;
-
+            
                 console.log(`Calling ${agentName} with args:`, functionArgs);
+            
+                // Convert IATA codes if needed
+                if(functionName === 'get_flight_information'){
+                    if(functionArgs.departure_location && functionArgs.departure_location.length !== 3){
+                        const iata = getIataCodeFromCity(functionArgs.departure_location);
+                        if(iata){
+                            functionArgs.departure_location = iata;
+                            console.log(`Converted ${functionArgs.departure_location} to IATA code: ${iata}`);
+                        }
+                    }
+                    if(functionArgs.destination && functionArgs.destination.length !== 3){
+                        const iata = getIataCodeFromCity(functionArgs.destination);
+                        if(iata){
+                            functionArgs.destination = iata;
+                            console.log(`Converted ${functionArgs.destination} to IATA code: ${iata}`);
+                        }
+                    }
 
-                const functionResult = await callAgentApi(functionName, functionArgs);
+                    // Create properly formatted parameters for the flight API
+                    let apiParams = {
+                        originLocationCode: functionArgs.departure_location,
+                        destinationLocationCode: functionArgs.destination,
+                        departureDate: functionArgs.departure_date,
+                        adults: functionArgs.number_of_passengers,
+                        travelClass: functionArgs.flight_type === 'BUSINESS-CLASS' ? 'BUSINESS' : 'ECONOMY'
+                    };
+
+                    var functionResult = await callAgentApi(functionName, apiParams);
+                } else {
+                    // For other tools, use the original parameters
+                    var functionResult = await callAgentApi(functionName, functionArgs);
+                }
+
+            
                 toolResults.push({   
                     agent: agentName,
                     toolCall: toolCall,
                     result: functionResult
                 });
-
+            
                 // Add the tool response to the conversation
                 finalMessages.push({
                     role: "tool",
@@ -203,13 +242,13 @@ app.post("/mother", async (req,res) => {
                     content: JSON.stringify(functionResult)
                 });
             }
-
+        
             // Get a second response from the model with the tool results
             const response2 = await client.chat.completions.create({
                 model: "gpt-4-turbo",
                 messages: finalMessages
             });
-
+        
             reply = response2.choices[0].message.content;
         }
 
