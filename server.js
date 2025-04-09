@@ -4,7 +4,8 @@ const dotenv = require('dotenv')
 const OpenAI = require('openai')
 const Prompt = require('./prompt')
 const { default: axios } = require('axios')
-const getIataCodeFromCity = require('./iata')
+const getIataCodeFromCity = require('./util/iata')
+const {isRatedLimit, setupIpTracking} = require('./middleware/ratelimit')
 
 dotenv.config()
 
@@ -15,6 +16,7 @@ app.use(express.json())
 app.use(cors())
 
 const client = new OpenAI({apiKey:process.env.OPENAI_API_KEY});
+const temperature = parseFloat(process.env.API_TEMPERATURE)||0.7;
 
 //Define Agents
 const AGENTS = {
@@ -145,6 +147,14 @@ async function callAgentApi(toolName, parameters){
 
 //Handles the AI Processing
 app.post("/mother", async (req,res) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'local';
+
+    if(isRatedLimit(ip)){
+        return res.status(429).json({error:"Too many requests, try again after 1 hour"});
+    }
+
+    setupIpTracking(ip);
+
     try{
         // Get messages from request body
         const  {messages} = req.body;
@@ -175,6 +185,7 @@ app.post("/mother", async (req,res) => {
         const completion = await client.chat.completions.create({
             model: "gpt-4-turbo",
             messages: finalMessages,
+            temperature: temperature,
             tools: tools,
             tool_choice: "auto",
         });
@@ -246,7 +257,8 @@ app.post("/mother", async (req,res) => {
             // Get a second response from the model with the tool results
             const response2 = await client.chat.completions.create({
                 model: "gpt-4-turbo",
-                messages: finalMessages
+                messages: finalMessages,
+                temperature: temperature
             });
         
             reply = response2.choices[0].message.content;

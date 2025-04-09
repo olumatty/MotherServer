@@ -4,7 +4,7 @@ function getRandomId(){
     return Math.random().toString(36).substr(2, 9);
 }
 
-function isRatedLimit(){
+function isRatedLimit(ip){
     if(ip === 'local') return false;
 
     const now = Date.now();
@@ -13,6 +13,8 @@ function isRatedLimit(){
 
     const ipData = rateLimitStore[ip]|| {calls :[]}
     ipData.calls = ipData.calls.filter(call => now - call.timestamp < windowMs )
+
+    rateLimitStore[ip] = ipData;
 
     if (ipData.calls.length >= limit){
         return true;
@@ -29,7 +31,7 @@ function setupIpTracking (ip){
     if(!rateLimitStore[ip]){
         rateLimitStore[ip] = {calls : [newCall]}
     }else{
-        rateLimitStore[ip].calls.push (newCall);
+        rateLimitStore[ip].calls.push(newCall);
     }
 }
 
