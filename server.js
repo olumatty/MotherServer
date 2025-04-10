@@ -2,10 +2,13 @@ const express = require('express')
 const cors = require('cors')
 const dotenv = require('dotenv')
 const OpenAI = require('openai')
-const Prompt = require('./prompt')
+const Prompt = require('./services/prompt')
 const { default: axios } = require('axios')
 const getIataCodeFromCity = require('./util/iata')
 const {isRatedLimit, setupIpTracking} = require('./middleware/ratelimit')
+const { v4: uuidv4 } = require('uuid');
+const session = require('express-session')
+const mermoryStore = require('memorystore')(session)
 
 dotenv.config()
 
@@ -14,6 +17,20 @@ const PORT = 8000;
 
 app.use(express.json())
 app.use(cors())
+
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'your-secret-key', 
+    resave: false,
+    saveUninitialized: true,
+    store: new MemoryStore({
+        checkPeriod: 86400000 
+    }),
+    cookie: {
+        secure: process.env.NODE_ENV === 'production', 
+        httpOnly: true, 
+        maxAge: 3600000 * 24 * 7 
+    }
+}));
 
 const client = new OpenAI({apiKey:process.env.OPENAI_API_KEY});
 const temperature = parseFloat(process.env.API_TEMPERATURE)||0.7;
@@ -155,6 +172,7 @@ app.post("/mother", async (req,res) => {
 
     setupIpTracking(ip);
 
+
     try{
         // Get messages from request body
         const  {messages} = req.body;
@@ -175,7 +193,7 @@ app.post("/mother", async (req,res) => {
         // Add system prompt as the first message
         const systemMessage = {
             role: "system",
-            content: Prompt,
+            content:`${Prompt}\n\nUser ID: ${req.userId}\nSession ID: ${req.sessionId}`
             
         };
         
@@ -266,6 +284,8 @@ app.post("/mother", async (req,res) => {
 
         res.status(200).json({
             reply,
+            userId: req.userId,
+            sessionId: req.sessionId,
             toolResults: toolResults.length > 0 ? toolResults : undefined 
         });
     } catch(error) {
