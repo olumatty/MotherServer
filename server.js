@@ -19,7 +19,7 @@ app.use(express.json())
 app.use(cors())
 
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'your-secret-key', 
+    secret: process.env.SESSION_SECRET , 
     resave: false,
     saveUninitialized: true,
     store: new mermoryStore({
@@ -139,7 +139,6 @@ async function callAgentApi(toolName, parameters){
 
         let response;
 
-    
         if (toolName === "get_accomodation" || toolName === "get_sightSeeing") {
             response = await axios.get(agent.endpoint, {
                 params: parameters
@@ -178,17 +177,19 @@ app.post("/mother", async (req,res) => {
     }
     const userId = req.session.userId;
 
-
     if(!req.session.sessionId){
         req.session.sessionId = uuidv4();
         console.log(`New session created for user: ${req.session.sessionId}`);
     }
     const sessionId = req.session.sessionId;
 
+    if(!req.session.chatHistory){
+        req.session.chatHistory = [];
+    }
 
     try{
         // Get messages from request body
-        const  {messages} = req.body;
+        const {messages} = req.body;
         
         // Validate messages
         if (!Array.isArray(messages) || messages.length === 0) {
@@ -206,8 +207,7 @@ app.post("/mother", async (req,res) => {
         // Add system prompt as the first message
         const systemMessage = {
             role: "system",
-            content:`${Prompt}\n\nUser ID: ${req.userId}\nSession ID: ${req.sessionId}`
-            
+            content: `${Prompt}\n\nUser ID: ${userId}\nSession ID: ${sessionId}`
         };
         
         // Create final messages array with system prompt first
@@ -237,7 +237,9 @@ app.post("/mother", async (req,res) => {
             
                 console.log(`Calling ${agentName} with args:`, functionArgs);
             
-                // Convert IATA codes if needed
+                let apiParams = functionArgs;
+                
+                // Convert IATA codes if needed for flight information
                 if(functionName === 'get_flight_information'){
                     if(functionArgs.departure_location && functionArgs.departure_location.length !== 3){
                         const iata = getIataCodeFromCity(functionArgs.departure_location);
@@ -255,20 +257,16 @@ app.post("/mother", async (req,res) => {
                     }
 
                     // Create properly formatted parameters for the flight API
-                    let apiParams = {
+                    apiParams = {
                         originLocationCode: functionArgs.departure_location,
                         destinationLocationCode: functionArgs.destination,
                         departureDate: functionArgs.departure_date,
                         adults: functionArgs.number_of_passengers,
-                        travelClass: functionArgs.flight_type === 'BUSINESS-CLASS' ? 'BUSINESS' : 'ECONOMY'
+                        travelClass: functionArgs.flight_type.toUpperCase() === 'BUSINESS-CLASS' ? 'BUSINESS' : 'ECONOMY'
                     };
-
-                    var functionResult = await callAgentApi(functionName, apiParams);
-                } else {
-                    // For other tools, use the original parameters
-                    var functionResult = await callAgentApi(functionName, functionArgs);
                 }
-
+                
+                const functionResult = await callAgentApi(functionName, apiParams);
             
                 toolResults.push({   
                     agent: agentName,
@@ -295,10 +293,24 @@ app.post("/mother", async (req,res) => {
             reply = response2.choices[0].message.content;
         }
 
+        // Store the latest user message and AI reply in chat history
+        if (messages.length > 0) {
+            req.session.chatHistory.push({ 
+                role: 'user', 
+                content: messages[messages.length - 1].content 
+            });
+        }
+        
+        req.session.chatHistory.push({ 
+            role: 'assistant', 
+            content: reply 
+        });
+
         res.status(200).json({
-            reply,
+            reply: reply,
             userId: userId,
-            sessionId:sessionId,
+            sessionId: sessionId,
+            chatHistory: req.session.chatHistory,
             toolResults: toolResults.length > 0 ? toolResults : undefined 
         });
     } catch(error) {
@@ -307,7 +319,32 @@ app.post("/mother", async (req,res) => {
     }
 });
 
+app.get("/get-chat-history", (req, res) => {
+    if(req.session.chatHistory){
+        res.status(200).json(req.session.chatHistory);
+    } else {
+        res.status(200).json([]);
+    }
+});
+
+app.post("/reset-session", (req, res) => {
+    // Keep the userId but reset the session and chat history
+    const userId = req.session.userId;
+    
+    // Create a new sessionId
+    req.session.sessionId = uuidv4();
+    console.log(`New session created for user: ${req.session.userId}, session: ${req.session.sessionId}`);
+    
+    // Clear chat history
+    req.session.chatHistory = [];
+    
+    res.status(200).json({ 
+        message: "Session reset successfully",
+        userId: userId,
+        sessionId: req.session.sessionId
+    });
+});
+
 app.listen(PORT, () => {
     console.log(`The server is running on port ${PORT}`);
 });
-
