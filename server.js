@@ -22,7 +22,7 @@ app.use(session({
     secret: process.env.SESSION_SECRET || 'your-secret-key', 
     resave: false,
     saveUninitialized: true,
-    store: new MemoryStore({
+    store: new mermoryStore({
         checkPeriod: 86400000 
     }),
     cookie: {
@@ -172,6 +172,19 @@ app.post("/mother", async (req,res) => {
 
     setupIpTracking(ip);
 
+    if(!req.session.userId){
+        req.session.userId = uuidv4();
+        console.log(`New session created for user: ${req.session.userId}`);
+    }
+    const userId = req.session.userId;
+
+
+    if(!req.session.sessionId){
+        req.session.sessionId = uuidv4();
+        console.log(`New session created for user: ${req.session.sessionId}`);
+    }
+    const sessionId = req.session.sessionId;
+
 
     try{
         // Get messages from request body
@@ -284,8 +297,8 @@ app.post("/mother", async (req,res) => {
 
         res.status(200).json({
             reply,
-            userId: req.userId,
-            sessionId: req.sessionId,
+            userId: userId,
+            sessionId:sessionId,
             toolResults: toolResults.length > 0 ? toolResults : undefined 
         });
     } catch(error) {
