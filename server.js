@@ -99,10 +99,21 @@ const tools = [
                 properties: {
                     destination: {
                         type: "string",
-                        description: "The destination city or location for accommodation",
+                        description: "The destination city or location and the country for accommodation(e.g Lagos, Nigeria or London, UK)",
+                    },
+                    checkInDate:{
+                        type: "string",
+                        format: "date",
+                        description: "The date of check-in in YYYY-MM-DD format"
+                    },
+                    checkOutDate:{
+                        type: "string",
+                        format: "date",
+                        description: "The date of check-out in YYYY-MM-DD format"
                     }
+                
                 },
-                required: ["destination"],
+                required: ["destination", checkInDate, checkOutDate],
                 additionalProperties: false
             }
         }
@@ -324,26 +335,10 @@ app.get("/get-chat-history", (req, res) => {
         res.status(200).json(req.session.chatHistory);
     } else {
         res.status(200).json([]);
+
     }
 });
 
-app.post("/reset-session", (req, res) => {
-    // Keep the userId but reset the session and chat history
-    const userId = req.session.userId;
-    
-    // Create a new sessionId
-    req.session.sessionId = uuidv4();
-    console.log(`New session created for user: ${req.session.userId}, session: ${req.session.sessionId}`);
-    
-    // Clear chat history
-    req.session.chatHistory = [];
-    
-    res.status(200).json({ 
-        message: "Session reset successfully",
-        userId: userId,
-        sessionId: req.session.sessionId
-    });
-});
 
 app.listen(PORT, () => {
     console.log(`The server is running on port ${PORT}`);
