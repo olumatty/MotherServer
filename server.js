@@ -9,6 +9,7 @@ const {isRatedLimit, setupIpTracking} = require('./middleware/ratelimit')
 const { v4: uuidv4 } = require('uuid');
 const session = require('express-session')
 const mermoryStore = require('memorystore')(session)
+const moment = require('moment'); 
 
 dotenv.config()
 
@@ -39,15 +40,15 @@ const temperature = parseFloat(process.env.API_TEMPERATURE)||0.7;
 const AGENTS = {
     get_flight_information:{
         name:"Alice (Flight Agent)",
-        endpoint:"http://localhost:8001/get-flight-prices"
+        endpoint:"http://localhost:8001/v1/get-flight-prices"
     },
     get_accomodation:{
         name:"Bob (Accomodation Agent)",
-        endpoint:"http://localhost:8002/get_accommodation"
+        endpoint:"http://localhost:8002/v1/get_accommodation"
     },
     get_sightSeeing:{
         name:"Charlie (Sightseeing Agent)",
-        endpoint:"http://localhost:8003/sight_seeing"
+        endpoint:"http://localhost:8003/v1/get_sight_seeing"
     }
 } 
 
@@ -93,7 +94,7 @@ const tools = [
         type: "function",
         function: {
             name: "get_accomodation",
-            description: "Get accommodation options from Bob (Accommodation Agent) at user destination location",
+            description: "Get accommodation options from Bob (Accommodation Agent) at user destination location, checkInDate and checkOutDate",
             parameters: {
                 type: "object",
                 properties: {
@@ -113,7 +114,7 @@ const tools = [
                     }
                 
                 },
-                required: ["destination", checkInDate, checkOutDate],
+                required: ["destination", "checkInDate", "checkOutDate"],
                 additionalProperties: false
             }
         }
@@ -182,19 +183,23 @@ app.post("/mother", async (req,res) => {
 
     setupIpTracking(ip);
 
-    if(!req.session.userId){
+    if (!req.session.userId) {
         req.session.userId = uuidv4();
         console.log(`New session created for user: ${req.session.userId}`);
+    } else {
+        console.log(`Reusing existing user session: ${req.session.userId}`);
     }
     const userId = req.session.userId;
 
-    if(!req.session.sessionId){
+    if (!req.session.sessionId) {
         req.session.sessionId = uuidv4();
         console.log(`New session created for user: ${req.session.sessionId}`);
+    } else {
+        console.log(`Reusing existing sessionId: ${req.session.sessionId}`);
     }
     const sessionId = req.session.sessionId;
 
-    if(!req.session.chatHistory){
+    if (!req.session.chatHistory) {
         req.session.chatHistory = [];
     }
 
@@ -267,11 +272,53 @@ app.post("/mother", async (req,res) => {
                         }
                     }
 
+                    let departureDate = functionArgs.departure_date;
+                    const currentDate = moment();
+                    const parsedDepartureDate = moment(departureDate, 'YYYY-MM-DD', true);
+
+                    console.log(`Extracted departure date: ${departureDate}`);
+
+                    if (!parsedDepartureDate.isValid()) {
+                        console.warn(`Departure date "${departureDate}" is not in YYYY-MM-DD format. Attempting to parse further.`);
+                        const tempDate = moment(departureDate); // Try parsing with less strict format
+                        if (tempDate.isValid()) {
+                            departureDate = tempDate.format('YYYY-MM-DD');
+                            console.log(`Successfully re-formatted departure date to: ${departureDate}`);
+                        } else {
+                            console.error(`Could not parse departure date: ${departureDate}.`);
+                            // Optionally, you could inform the user here or use a default future date.
+                        }
+                    }
+
+                    const departureDateMoment = moment(departureDate, 'YYYY-MM-DD', true);
+                    if (departureDateMoment.isValid() && departureDateMoment.isBefore(currentDate, 'day')) {
+                        console.warn(`Departure date "${departureDate}" is in the past. Assuming current year (${currentDate.year()}).`);
+                        const parts = departureDate.split('-');
+                        departureDate = `${currentDate.year()}-${parts[1]}-${parts[2]}`;
+                        console.log(`Adjusted departure date to: ${departureDate}`);
+                    } else if (departureDateMoment.isValid() && !departureDate.includes('-')) {
+                        // If the AI returns a date without the YYYY-MM-DD format, try to parse and reformat assuming current year
+                        const tempDate = moment(departureDate);
+                        if (tempDate.isValid()) {
+                            departureDate = tempDate.format('YYYY-MM-DD');
+                            console.log(`Re-formatted ambiguous date to: ${departureDate}`);
+                        }
+                    }
+
+                    // **--- LOG THE FINAL DATE BEFORE SENDING ---**
+                    console.log(`Sending departure date to Flight API: ${departureDate}`)
+
+                    const finalCheck = moment(departureDate, 'YYYY-MM-DD');
+                        if (!finalCheck.isValid() || finalCheck.isBefore(moment(), 'day')) {
+                            departureDate = moment().add(1, 'days').format('YYYY-MM-DD');
+                            console.log(`EMERGENCY DATE CORRECTION: Using ${departureDate}`);
+                        }
+
                     // Create properly formatted parameters for the flight API
                     apiParams = {
                         originLocationCode: functionArgs.departure_location,
                         destinationLocationCode: functionArgs.destination,
-                        departureDate: functionArgs.departure_date,
+                        departureDate: departureDate,
                         adults: functionArgs.number_of_passengers,
                         travelClass: functionArgs.flight_type.toUpperCase() === 'BUSINESS-CLASS' ? 'BUSINESS' : 'ECONOMY'
                     };

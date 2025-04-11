@@ -8,7 +8,7 @@ function isRatedLimit(ip){
     if(ip === 'local') return false;
 
     const now = Date.now();
-    const limit = 5;
+    const limit = 7;
     const windowMs= 60 * 60 * 1000
 
     const ipData = rateLimitStore[ip]|| {calls :[]}
