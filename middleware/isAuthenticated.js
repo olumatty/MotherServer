@@ -1,9 +1,9 @@
 const isAuthenticated = (req, res, next) => {
     if (!req.session.userId) {
-        req.isAuthenticated = true;
-        console.log(`Guest session created: ${req.session.userId}`);
-    }else{
-        req.isAuthenticated = false;
+        req.isAuthenticated = false;  // No userId means NOT authenticated
+        console.log(`Guest session created: ${req.sessionID}`); // Log the sessionID instead
+    } else {
+        req.isAuthenticated = true;  // Has userId means IS authenticated
     }
 
     next(); // Always proceed

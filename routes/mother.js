@@ -4,17 +4,16 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const { OpenAI } = require('openai');
-const chatSession = require('../models/chatSession'); 
-const {getIataCodeFromCity} = require('../util/iata');
-const Prompt= require('../services/prompt');
+const chatSession = require('../models/chatSession');
+const { getIataCodeFromCity } = require('../util/iata');
+const Prompt = require('../services/prompt');
 const dotenv = require('dotenv');
-const trackUserOrGuest = require('../middleware/trackUserOrGuest');
 
 dotenv.config();
 
 // Import your rate limiting functions
 const { isRatedLimit, setupIpTracking } = require('../middleware/ratelimit');
- 
+
 // OpenAI client setup
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
@@ -104,7 +103,7 @@ const tools = [
     },
     {
         type: "function",
-        function: { 
+        function: {
             name: "get_sightSeeing",
             description: "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
             parameters: {
@@ -127,7 +126,7 @@ function parseAndValidateDate(dateString) {
     let parsedDate = moment(dateString, 'YYYY-MM-DD', true);
 
     if (!parsedDate.isValid()) {
-        parsedDate = moment(dateString); 
+        parsedDate = moment(dateString);
         if (!parsedDate.isValid()) {
             return { error: `Could not parse date: ${dateString}. Please use YYYY-MM-DD format.` };
         }
@@ -191,33 +190,41 @@ async function callAgentApi(toolName, parameters) {
 }
 
 // Create the main endpoint for the mother API
-router.post('/api/v1/mother',trackUserOrGuest,async (req, res) => {
-    const sessionId = req.session.userId || req.session.guestId;
+router.post('/', async (req, res) => {
+    let sessionId;
+    let userId;
 
+    // Fix the authentication check
+    if (req.isAuthenticated === true && req.session.userId) {
+        // User is authenticated
+        sessionId = req.session.id;
+        userId = req.session.userId;
+        console.log(`Using authenticated user session: ${userId}, session: ${sessionId}`);
+    } else {
+        // Guest user
+        if (!req.session.guestId) {
+            req.session.guestId = uuidv4();
+        }
+        sessionId = req.session.id;
+        userId = req.session.guestId;
+        console.log(`Using guest session: ${userId}, session: ${sessionId}`);
+    }
+
+    // IP tracking and rate limiting
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'local';
 
+    // Make sure these functions are defined elsewhere in your code
     if (isRatedLimit(ip)) {
         return res.status(429).json({ error: "Too many requests, try again after 1 hour" });
     }
 
     setupIpTracking(ip);
 
-    console.log(typeof yourHandler);
-
-    // Check for authenticated user
-    const userId = req.session.userId || uuidv4();
-    if (!req.session.userId) {
-        req.session.userId = userId;
-        console.log(`New session created for user: ${userId}`);
-    } else {
-        console.log(`Using authenticated user session: ${userId}`);
-    }
-
+    // Initialize chat history if it doesn't exist
     if (!req.session.chatHistory) {
         console.log("Initializing chat history");
         req.session.chatHistory = [];
     }
-
     try {
         const { messages } = req.body;
 
@@ -225,8 +232,7 @@ router.post('/api/v1/mother',trackUserOrGuest,async (req, res) => {
             return res.status(400).json({ error: "Messages must be a non-empty array" });
         }
 
-        const validMessages = messages.map(msg => ({ role: "user", ...msg })); // Ensure role is present
-
+        const validMessages = messages.map(msg => ({ role: "user", content: msg.content })); // Ensure correct structure
 
         const systemMessage = {
             role: "system",
@@ -282,7 +288,7 @@ router.post('/api/v1/mother',trackUserOrGuest,async (req, res) => {
                             console.log(`Converted destination "${functionArgs.destination}" to IATA: ${iata}`);
                         } else {
                             console.warn(`Could not find IATA code for destination: ${functionArgs.destination}`);
-                            continue; 
+                            continue;
                         }
                         delete apiParams.destination;
                     } else if (functionArgs.destination) {
@@ -293,7 +299,7 @@ router.post('/api/v1/mother',trackUserOrGuest,async (req, res) => {
                     const dateResult = parseAndValidateDate(functionArgs.departure_date);
                     if (dateResult.error) {
                         console.warn(`Invalid departure date: ${dateResult.error}`);
-                        continue; 
+                        continue;
                     }
                     apiParams.departureDate = dateResult.date;
                     delete apiParams.departure_date;
@@ -332,13 +338,15 @@ router.post('/api/v1/mother',trackUserOrGuest,async (req, res) => {
         if (messages.length > 0) {
             req.session.chatHistory.push({
                 role: 'user',
-                content: messages[messages.length - 1].content
+                content: messages[messages.length - 1].content,
+                timestamp: messages[messages.length - 1].timestamp // Ensure timestamp is saved
             });
         }
 
         req.session.chatHistory.push({
             role: 'assistant',
-            content: reply
+            content: reply,
+            timestamp: new Date().toISOString() // Add timestamp to assistant message
         });
 
         // Update or create chat session record in MongoDB
@@ -356,7 +364,7 @@ router.post('/api/v1/mother',trackUserOrGuest,async (req, res) => {
             chatHistory: req.session.chatHistory
         });
 
-        res.setHeader('X-User-ID', userId.string());
+        res.setHeader('X-User-ID', userId); // Corrected line
         res.status(200).json({
             reply: reply,
             userId: userId,

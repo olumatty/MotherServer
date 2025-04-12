@@ -7,6 +7,7 @@ const MongoStore = require('connect-mongo');
 const authRouter = require('./routes/auth');
 const motherRouter = require('./routes/mother');
 const isAuthenticated = require('./middleware/isAuthenticated');
+const trackUserOrGuest = require('./middleware/trackUserOrGuest'); // Import your guest tracking middleware
 
 dotenv.config();
 
@@ -14,7 +15,12 @@ const app = express();
 const PORT = 8000;
 
 app.use(express.json());
-app.use(cors());
+
+app.use(
+    cors({
+      origin: "*",
+    })
+  );
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
@@ -43,13 +49,14 @@ app.use((req, res, next) => {
     }
     next();
 });
-app.use(isAuthenticated);
+
+app.use(trackUserOrGuest);
+
 app.use('/api/v1/auth', authRouter);
-app.use('/api/v1/mother', motherRouter);
 
 
-
-app.get("/get-chat-history", authCheck, (req, res) => {
+app.use('/api/v1/mother', isAuthenticated, motherRouter);
+app.get("/get-chat-history", isAuthenticated, (req, res) => {
     if (req.session.chatHistory) {
         res.status(200).json(req.session.chatHistory);
     } else {
