@@ -4,7 +4,9 @@ const dotenv = require('dotenv');
 const session = require('express-session');
 const mongoose = require('mongoose');
 const MongoStore = require('connect-mongo');
-
+const authRouter = require('./routes/auth');
+const motherRouter = require('./routes/mother');
+const isAuthenticated = require('./middleware/isAuthenticated');
 
 dotenv.config();
 
@@ -35,8 +37,19 @@ app.use(session({
 }));
 console.log("Session middleware initialized");
 
+app.use((req, res, next) => {
+    if (req.session.userId) {
+        res.setHeader('X-User-ID', req.session.userId);
+    }
+    next();
+});
+app.use(isAuthenticated);
+app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/mother', motherRouter);
 
-app.get("/get-chat-history", (req, res) => {
+
+
+app.get("/get-chat-history", authCheck, (req, res) => {
     if (req.session.chatHistory) {
         res.status(200).json(req.session.chatHistory);
     } else {

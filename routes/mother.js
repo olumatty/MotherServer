@@ -5,13 +5,16 @@ const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const { OpenAI } = require('openai');
 const chatSession = require('../models/chatSession'); 
-const {authCheck} = require('../middleware/authCheck');
 const {getIataCodeFromCity} = require('../util/iata');
+const Prompt= require('../services/prompt');
+const dotenv = require('dotenv');
+const trackUserOrGuest = require('../middleware/trackUserOrGuest');
 
+dotenv.config();
 
 // Import your rate limiting functions
-const { isRatedLimit, setupIpTracking } = requir('middleware/rateLimit');
-
+const { isRatedLimit, setupIpTracking } = require('../middleware/ratelimit');
+ 
 // OpenAI client setup
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
@@ -101,7 +104,7 @@ const tools = [
     },
     {
         type: "function",
-        function: { // Fixed typo: changed "functionc" to "function"
+        function: { 
             name: "get_sightSeeing",
             description: "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
             parameters: {
@@ -119,7 +122,6 @@ const tools = [
     }
 ];
 
-// Utility function to handle date parsing for flight information
 function parseAndValidateDate(dateString) {
     const currentDate = moment();
     let parsedDate = moment(dateString, 'YYYY-MM-DD', true);
@@ -142,14 +144,6 @@ function parseAndValidateDate(dateString) {
     }
 
     return { date: parsedDate.format('YYYY-MM-DD') };
-}
-
-// Helper function for IATA code conversion
-function getIataCodeFromCity(cityName) {
-    // This is a placeholder - you'll need to implement this function
-    // to convert city names to IATA codes
-    console.log(`Need to convert ${cityName} to IATA code`);
-    return null; // Replace with actual implementation
 }
 
 // Calls the Agents API AND Parameters
@@ -197,7 +191,9 @@ async function callAgentApi(toolName, parameters) {
 }
 
 // Create the main endpoint for the mother API
-router.post('/api/v1/mother', authCheck, async (req, res) => {
+router.post('/api/v1/mother',trackUserOrGuest,async (req, res) => {
+    const sessionId = req.session.userId || req.session.guestId;
+
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'local';
 
     if (isRatedLimit(ip)) {
@@ -206,23 +202,16 @@ router.post('/api/v1/mother', authCheck, async (req, res) => {
 
     setupIpTracking(ip);
 
-    // Check for authenticated user
-    const userId = req.session.userId;
-    if (!userId) {
-        // Generate a temporary user ID for unauthenticated users
-        console.log(`New temporary session created for user: ${req.session.userId}`);
-        userId = uuidv4();
-    }
-    const sessionId = req.sessionID;
+    console.log(typeof yourHandler);
 
-    console.log(`Session ID: ${sessionId}, User ID: ${userId}`);
-    console.log("Request body:", req.body);
-    console.log("Request headers:", req.headers);
-    console.log("Request IP:", ip);
-    console.log("Request session:", req.session);
-    console.log("Request session ID:", req.sessionID);
-    console.log("Request session user ID:", req.session.userId);
-    console.log("Request session chat history:", req.session.chatHistory);
+    // Check for authenticated user
+    const userId = req.session.userId || uuidv4();
+    if (!req.session.userId) {
+        req.session.userId = userId;
+        console.log(`New session created for user: ${userId}`);
+    } else {
+        console.log(`Using authenticated user session: ${userId}`);
+    }
 
     if (!req.session.chatHistory) {
         console.log("Initializing chat history");
@@ -238,12 +227,10 @@ router.post('/api/v1/mother', authCheck, async (req, res) => {
 
         const validMessages = messages.map(msg => ({ role: "user", ...msg })); // Ensure role is present
 
-        // You need to define your system prompt here
-        const Prompt = "You are a helpful travel assistant that can help users plan their trips by providing information about flights, accommodations, and sightseeing options.";
 
         const systemMessage = {
             role: "system",
-            content: `${Prompt}\n\nUser ID: ${userId}\nSession ID: ${sessionId}`
+            content: Prompt
         };
 
         const finalMessages = [systemMessage, ...validMessages];
@@ -369,7 +356,7 @@ router.post('/api/v1/mother', authCheck, async (req, res) => {
             chatHistory: req.session.chatHistory
         });
 
-        res.setHeader('X-User-ID', userId);
+        res.setHeader('X-User-ID', userId.string());
         res.status(200).json({
             reply: reply,
             userId: userId,

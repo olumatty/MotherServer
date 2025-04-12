@@ -3,6 +3,8 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const User = require('../models/user');
 
+
+
 router.post('/signup', async (req, res) => {
     try {
         const { username, password, email } = req.body;
@@ -29,27 +31,26 @@ router.post('/signup', async (req, res) => {
 });
 
 
-router.post('/login', async(req, res) => {
+router.post('/login', async (req, res) => {
     try {
-        const { username, password } = req.body;
-        const user = await User.findOne({ username });
+        const { email, password } = req.body;
+        const user = await User.findOne({ email });
         if (!user) {
             return res.status(401).json({ message: 'User not found' });
         }
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(401).json({ message: 'Invalid username or password' });
-        }   
-        req.session.userId = user._id;
+        }
 
+        // ... some other logic ...
+
+        // Set header *before* sending the final response
         res.setHeader('X-User-ID', user._id);
-        res.status(200).json({ message: 'Login successful' });
-
-        // Set the session cookie
-        res.status(200).json({ message: 'Login successful', userId: user._id });
+        return res.status(200).json({ message: 'Login successful', userId: user._id });
     } catch (error) {
-        res.status(500).json({ message: 'Error logging in', error: error.message });
-    }   
+        return res.status(500).json({ message: 'Error logging in', error: error.message });
+    }
 });
 
 router.post('/logout', async(req, res) => {
@@ -61,3 +62,5 @@ router.post('/logout', async(req, res) => {
         res.status(500).json({ message: 'Error logging out', error: error.message });
     }   
 });
+
+module.exports = router;
