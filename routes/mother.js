@@ -6,6 +6,7 @@ const moment = require('moment');
 const { OpenAI } = require('openai');
 const chatSession = require('../models/chatSession'); 
 const {authCheck} = require('../middleware/authCheck');
+const {getIataCodeFromCity} = require('../util/iata');
 
 
 // Import your rate limiting functions
@@ -222,7 +223,7 @@ router.post('/api/v1/mother', authCheck, async (req, res) => {
     console.log("Request session ID:", req.sessionID);
     console.log("Request session user ID:", req.session.userId);
     console.log("Request session chat history:", req.session.chatHistory);
-    
+
     if (!req.session.chatHistory) {
         console.log("Initializing chat history");
         req.session.chatHistory = [];
