@@ -7,8 +7,7 @@ const User = require('../models/user');
 
 router.post('/signup', async (req, res) => {
     try {
-        const { username, password, email } = req.body;
-        
+        const { username, password, email } = req.body;ß
         // Check if username already exists
         const existingUser = await User.findOne({ username });
         if (existingUser) {
@@ -24,6 +23,7 @@ router.post('/signup', async (req, res) => {
         const user = new User({ username, password, email });
         await user.save();
         req.session.userId = user._id;
+        req.session.isAuthenticated = true;
         res.status(201).json({ message: 'User registered successfully', userId: user._id });
     } catch (error) {
         res.status(500).json({ message: 'Error registering user', error: error.message });
@@ -45,9 +45,16 @@ router.post('/login', async (req, res) => {
 
         req.session.userId = user._id;
         req.session.isAuthenticated = true;
-        // Set header *before* sending the final response
+
+        req.session.save(err => {
+            if(err) {
+                console.error("session save error:", err);
+                return res.status(500).json({ message: 'Error saving session', error: err.message });
+            }    
+         // Set header *before* sending the final response
         res.setHeader('X-User-ID', user._id.toString());
         return res.status(200).json({ message: 'Login successful', userId: user._id });
+    });
     } catch (error) {
         return res.status(500).json({ message: 'Error logging in', error: error.message });
     }

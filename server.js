@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -7,29 +8,32 @@ const MongoStore = require('connect-mongo');
 const authRouter = require('./routes/auth');
 const motherRouter = require('./routes/mother');
 const isAuthenticated = require('./middleware/isAuthenticated');
-const trackUserOrGuest = require('./middleware/trackUserOrGuest'); // Import your guest tracking middleware
+const trackUserOrGuest = require('./middleware/trackUserOrGuest');
 
 dotenv.config();
 
 const app = express();
 const PORT = 8000;
 
-app.use(express.json());
-
+// CORS configuration that allows credentials
 app.use(
-    cors({
-      origin: "*",
-    })
-  );
+  cors({
+    origin: process.env.CLIENT_URL || "http://localhost:5173", // Specify your frontend URL
+    credentials: true, // This is crucial for cookies/sessions!
+  })
+);
+
+app.use(express.json());
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
+// Session configuration
 app.use(session({
     secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false,
     store: MongoStore.create({
         mongoUrl: process.env.MONGO_URI,
         collectionName: 'sessions',
@@ -38,11 +42,19 @@ app.use(session({
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
-        maxAge: 3600000 * 24 * 7
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' // Important for cross-origin requests
     }
 }));
 console.log("Session middleware initialized");
 
+// Apply isAuthenticated middleware globally
+app.use(isAuthenticated);
+
+// Then track user or guest status
+app.use(trackUserOrGuest);
+
+// Set header for authenticated users
 app.use((req, res, next) => {
     if (req.session.userId) {
         res.setHeader('X-User-ID', req.session.userId);
@@ -50,13 +62,11 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(trackUserOrGuest);
-
+// Routes
 app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/mother', motherRouter); // No need for isAuthenticated here since it's global
 
-
-app.use('/api/v1/mother', isAuthenticated, motherRouter);
-app.get("/get-chat-history", isAuthenticated, (req, res) => {
+app.get("/get-chat-history", (req, res) => {
     if (req.session.chatHistory) {
         res.status(200).json(req.session.chatHistory);
     } else {
@@ -67,9 +77,3 @@ app.get("/get-chat-history", isAuthenticated, (req, res) => {
 app.listen(PORT, () => {
     console.log(`The server is running on port ${PORT}`);
 });
-
-// TODO: CREATE AN HELPER THAT GET CURRENT DATE AND TIME
-// TODO: CREATE A SCHEMA FOR USER LOGIN AND REGISTER
-// TOD0: MAKE THE USER LOGIN AND REGISTER ROUTES
-// TODO: EACH USER SHOULD HAVE A DIFFERENT SESSION ID ,USER ID AND CHAT HISTORY
-//

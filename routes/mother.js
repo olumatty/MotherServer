@@ -15,7 +15,7 @@ dotenv.config();
 const { isRatedLimit, setupIpTracking } = require('../middleware/ratelimit');
 
 // OpenAI client setup
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
 
 // Define Agents
@@ -191,11 +191,31 @@ async function callAgentApi(toolName, parameters) {
 
 // Create the main endpoint for the mother API
 router.post('/', async (req, res) => {
+    const userApiKey = req.headers['x-user-openai-key'];
+    const client = new OpenAI({ apiKey: userApiKey || process.env.OPENAI_API_KEY });
+
+    
+    const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 
+               req.socket.remoteAddress || 
+               'local';
+    
+    // Check if the request is rate limited
+    if (isRatedLimit(ip)) {
+        return res.status(429).json({ 
+            error: "Too many requests", 
+            message: "Please try again after 1 hour",
+            retryAfter: 3600 // seconds (1 hour)
+        });
+    }
+    
+    // Track this request for rate limiting purposes
+    setupIpTracking(ip);
+    
+    // Authentication check - use session.isAuthenticated for consistency
     let sessionId;
     let userId;
 
-    // Fix the authentication check
-    if (req.isAuthenticated === true && req.session.userId) {
+    if (req.session.isAuthenticated && req.session.userId) {
         // User is authenticated
         sessionId = req.session.id;
         userId = req.session.userId;
@@ -204,21 +224,18 @@ router.post('/', async (req, res) => {
         // Guest user
         if (!req.session.guestId) {
             req.session.guestId = uuidv4();
+            // Save the session to ensure the guestId persists
+            await new Promise((resolve, reject) => {
+                req.session.save(err => {
+                    if (err) reject(err);
+                    else resolve();
+                });
+            });
         }
         sessionId = req.session.id;
         userId = req.session.guestId;
         console.log(`Using guest session: ${userId}, session: ${sessionId}`);
     }
-
-    // IP tracking and rate limiting
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'local';
-
-    // Make sure these functions are defined elsewhere in your code
-    if (isRatedLimit(ip)) {
-        return res.status(429).json({ error: "Too many requests, try again after 1 hour" });
-    }
-
-    setupIpTracking(ip);
 
     // Initialize chat history if it doesn't exist
     if (!req.session.chatHistory) {
