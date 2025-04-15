@@ -69,7 +69,7 @@ setInterval(() => {
 }, 10 * 60 * 1000); // Clean up every 10 minutes
 
 module.exports = {
-  isRateLimited,
-  trackRequest,
-  rateLimitMiddleware
-};
+    isRateLimited,
+    trackRequest,
+    rateLimitMiddleware
+  };

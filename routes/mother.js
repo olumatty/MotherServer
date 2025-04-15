@@ -8,11 +8,12 @@ const chatSession = require('../models/chatSession');
 const { getIataCodeFromCity } = require('../util/iata');
 const Prompt = require('../services/prompt');
 const dotenv = require('dotenv');
+const {isRateLimited,trackRequest} = require('../middleware/ratelimit');
+
 
 dotenv.config();
 
 // Import your rate limiting functions
-const { isRatedLimit, setupIpTracking } = require('../middleware/ratelimit');
 
 // OpenAI client setup
 
@@ -55,7 +56,7 @@ const tools = [
                     departure_date: {
                         type: "string",
                         format: "date",
-                        description: "The date of departure inYYYY-MM-DD format"
+                        description: "The date of departure in YYYY-MM-DD format"
                     },
                     flight_type: {
                         type: "string",
@@ -87,12 +88,12 @@ const tools = [
                     checkInDate: {
                         type: "string",
                         format: "date",
-                        description: "The date of check-in inYYYY-MM-DD format"
+                        description: "The date of check-in in YYYY-MM-DD format"
                     },
                     checkOutDate: {
                         type: "string",
                         format: "date",
-                        description: "The date of check-out inYYYY-MM-DD format"
+                        description: "The date of check-out in YYYY-MM-DD format"
                     }
 
                 },
@@ -189,59 +190,60 @@ async function callAgentApi(toolName, parameters) {
     }
 }
 
-// Create the main endpoint for the mother API
 router.post('/', async (req, res) => {
     const userApiKey = req.headers['x-user-openai-key'];
     const client = new OpenAI({ apiKey: userApiKey || process.env.OPENAI_API_KEY });
 
-    
-    const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 
-               req.socket.remoteAddress || 
-               'local';
-    
+    const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+        req.socket.remoteAddress ||
+        'local';
+
     // Check if the request is rate limited
-    if (isRatedLimit(ip)) {
-        return res.status(429).json({ 
-            error: "Too many requests", 
+    if (isRateLimited(ip)) {
+        return res.status(429).json({
+            error: "Too many requests",
             message: "Please try again after 1 hour",
             retryAfter: 3600 // seconds (1 hour)
         });
     }
-    
-    // Track this request for rate limiting purposes
-    setupIpTracking(ip);
-    
-    // Authentication check - use session.isAuthenticated for consistency
-    let sessionId;
-    let userId;
 
-    if (req.session.isAuthenticated && req.session.userId) {
-        // User is authenticated
-        sessionId = req.session.id;
-        userId = req.session.userId;
-        console.log(`Using authenticated user session: ${userId}, session: ${sessionId}`);
-    } else {
-        // Guest user
-        if (!req.session.guestId) {
-            req.session.guestId = uuidv4();
-            // Save the session to ensure the guestId persists
-            await new Promise((resolve, reject) => {
-                req.session.save(err => {
-                    if (err) reject(err);
-                    else resolve();
-                });
-            });
-        }
-        sessionId = req.session.id;
+    // Track this request for rate limiting purposes
+    trackRequest(ip);
+
+    // Authentication and Session Handling
+    let sessionId = req.session.id;
+    let userId = req.session.userId || req.session.guestId;
+    let chatId = req.session.chatId;
+
+    if (!req.session.userId && !req.session.guestId) {
+        req.session.guestId = uuidv4();
         userId = req.session.guestId;
-        console.log(`Using guest session: ${userId}, session: ${sessionId}`);
+        console.log(`New guest session created: ${userId}`);
+        // Save the session to ensure guestId persists
+        await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
     }
 
-    // Initialize chat history if it doesn't exist
+    if (!chatId) {
+        chatId = uuidv4();
+        req.session.chatId = chatId;
+        await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
+        console.log(`New chatId generated: ${chatId}`);
+    }
+
+    console.log(`Using session: ${sessionId}, user: ${userId}, chat: ${chatId}`);
+
+    // Initialize chat history and agent initiation flags
     if (!req.session.chatHistory) {
         console.log("Initializing chat history");
         req.session.chatHistory = [];
     }
+    if (req.session.aliceInitiated === undefined) {
+        req.session.aliceInitiated = false;
+    }
+    if (req.session.bobRespondedToAlice === undefined) {
+        req.session.bobRespondedToAlice = false;
+    }
+
     try {
         const { messages } = req.body;
 
@@ -269,6 +271,10 @@ router.post('/', async (req, res) => {
         let assistantMessage = completion.choices[0].message;
         let reply = assistantMessage.content;
         let toolResults = [];
+        let shouldCallBob = false;
+        let shouldCallCharlie = false;
+        let skippedBob = false;
+        let skippedCharlie = false;
 
         if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
             finalMessages.push(assistantMessage);
@@ -281,6 +287,8 @@ router.post('/', async (req, res) => {
                 console.log(`Calling ${agentName} with args:`, functionArgs);
 
                 let apiParams = { ...functionArgs };
+                let functionResult;
+                let shouldExecuteTool = true;
 
                 if (functionName === 'get_flight_information') {
                     if (functionArgs.departure_location && functionArgs.departure_location.length !== 3) {
@@ -290,7 +298,8 @@ router.post('/', async (req, res) => {
                             console.log(`Converted departure location "${functionArgs.departure_location}" to IATA: ${iata}`);
                         } else {
                             console.warn(`Could not find IATA code for departure location: ${functionArgs.departure_location}`);
-                            continue;
+                            shouldExecuteTool = false;
+                            functionResult = { error: `Could not find airport code for: ${functionArgs.departure_location}` };
                         }
                         delete apiParams.departure_location;
                     } else if (functionArgs.departure_location) {
@@ -305,7 +314,8 @@ router.post('/', async (req, res) => {
                             console.log(`Converted destination "${functionArgs.destination}" to IATA: ${iata}`);
                         } else {
                             console.warn(`Could not find IATA code for destination: ${functionArgs.destination}`);
-                            continue;
+                            shouldExecuteTool = false;
+                            functionResult = { error: `Could not find airport code for: ${functionArgs.destination}` };
                         }
                         delete apiParams.destination;
                     } else if (functionArgs.destination) {
@@ -316,18 +326,47 @@ router.post('/', async (req, res) => {
                     const dateResult = parseAndValidateDate(functionArgs.departure_date);
                     if (dateResult.error) {
                         console.warn(`Invalid departure date: ${dateResult.error}`);
-                        continue;
+                        shouldExecuteTool = false;
+                        functionResult = { error: dateResult.error };
+                    } else {
+                        apiParams.departureDate = dateResult.date;
+                        delete apiParams.departure_date;
                     }
-                    apiParams.departureDate = dateResult.date;
-                    delete apiParams.departure_date;
 
                     apiParams.adults = functionArgs.number_of_passengers;
                     delete apiParams.number_of_passengers;
                     apiParams.travelClass = functionArgs.flight_type.toUpperCase() === 'BUSINESS-CLASS' ? 'BUSINESS' : 'ECONOMY';
                     delete apiParams.flight_type;
-                }
 
-                const functionResult = await callAgentApi(functionName, apiParams);
+                    if (shouldExecuteTool) {
+                        functionResult = await callAgentApi(functionName, apiParams);
+                        req.session.aliceInitiated = !functionResult?.error;
+                    } else if (!functionResult) {
+                        functionResult = { error: "Could not process flight information request." };
+                    }
+                } else if (functionName === 'get_accomodation') {
+                    if (req.session.aliceInitiated) {
+                        functionResult = await callAgentApi(functionName, apiParams);
+                        req.session.bobRespondedToAlice = !functionResult?.error;
+                        shouldCallBob = true;
+                    } else {
+                        shouldExecuteTool = false;
+                        functionResult = { status: "pending", reason: "flight_details_needed" };
+                        skippedBob = true;
+                    }
+                } else if (functionName === 'get_sightSeeing') {
+                    if (req.session.aliceInitiated && req.session.bobRespondedToAlice) {
+                        functionResult = await callAgentApi(functionName, apiParams);
+                        shouldCallCharlie = true;
+                    } else {
+                        shouldExecuteTool = false;
+                        functionResult = { status: "pending", reason: "flight_and_accommodation_needed" };
+                        skippedCharlie = true;
+                    }
+                } else {
+                    functionResult = { error: `Unknown tool: ${functionName}` };
+                    shouldExecuteTool = false;
+                }
 
                 toolResults.push({
                     agent: agentName,
@@ -371,21 +410,28 @@ router.post('/', async (req, res) => {
             { sessionId: sessionId },
             {
                 userId: userId,
+                chatId: chatId,
                 chatHistory: req.session.chatHistory,
+                aliceInitiated: req.session.aliceInitiated,
+                bobRespondedToAlice: req.session.bobRespondedToAlice
             },
             { upsert: true, new: true }
         );
         console.log("🔄 MongoDB update payload:", {
             sessionId: sessionId,
             userId: userId,
-            chatHistory: req.session.chatHistory
+            chatId: chatId,
+            chatHistory: req.session.chatHistory,
+            aliceInitiated: req.session.aliceInitiated,
+            bobRespondedToAlice: req.session.bobRespondedToAlice
         });
 
-        res.setHeader('X-User-ID', userId); // Corrected line
+        res.setHeader('X-User-ID', userId);
         res.status(200).json({
             reply: reply,
             userId: userId,
             sessionId: sessionId,
+            chatId: chatId,
             chatHistory: req.session.chatHistory,
             toolResults: toolResults.length > 0 ? toolResults : undefined
         });

@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const User = require('../models/user');
+const chatSession = require('../models/chatSession');
+const { v4: uuidv4 } = require('uuid');
 
 
 
@@ -43,18 +45,30 @@ router.post('/login', async (req, res) => {
             return res.status(401).json({ message: 'Invalid username or password' });
         }
 
+        // Check if the user already has a chatId
+        if (!user.chatId) {
+            // Generate a new chatId using uuid (assuming you have uuid imported)
+            // // Import uuid here if not already at the top
+            user.chatId = uuidv4();
+            await user.save(); // Save the updated user with the new chatId
+        }
+
         req.session.userId = user._id;
         req.session.isAuthenticated = true;
+        req.session.chatId = user.chatId; // Store chatId in the session
+        console.log("User logged in, session ID:", req.sessionID);
+        console.log("Session contents:", req.session);
 
         req.session.save(err => {
             if(err) {
                 console.error("session save error:", err);
                 return res.status(500).json({ message: 'Error saving session', error: err.message });
-            }    
-         // Set header *before* sending the final response
-        res.setHeader('X-User-ID', user._id.toString());
-        return res.status(200).json({ message: 'Login successful', userId: user._id });
-    });
+            }
+            // Set header *before* sending the final response
+            res.setHeader('X-User-ID', user._id.toString());
+
+            return res.status(200).json({ message: 'Login successful', userId: user._id, chatId: user.chatId }); // Send chatId in the response
+        });
     } catch (error) {
         return res.status(500).json({ message: 'Error logging in', error: error.message });
     }
@@ -69,5 +83,38 @@ router.post('/logout', async(req, res) => {
         res.status(500).json({ message: 'Error logging out', error: error.message });
     }   
 });
+
+router.post('/reset-chat-state', async(req, res) => {
+    const {chatId} = req.body;
+
+    if(!chatId){
+        return res.status(400).json({ message: 'Chat ID is required' });
+    }
+
+    try{
+        const updatedSession = await chatSession.findOneAndUpdate
+        ({chatId: chatId},
+        {
+            aliceInitiated: false,
+            bobRespondedToAlice: false
+        },
+        {new: true}
+
+    );
+    if(updatedSession){
+        return res.status(200).json({ message: 'Chat state reset successfully' });
+
+    }  else {
+        return res.status(500).json({ message: 'Error resetting chat state' });
+    }
+
+    } catch (error) {
+        return res.status(500).json({ message: 'Error resetting chat state', error: error.message });
+    }
+});
+
+
+
+
 
 module.exports = router;

@@ -7,11 +7,14 @@ const messageSchema = new mongoose.Schema({
 });
 
 const chatSessionSchema = new mongoose.Schema({
+    chatId: { type: String, required: true, index: true, unique: true }, // ADD THIS FIELD
     sessionId: { type: String, required: true, index: true },
     userId: { type: String, required: true, index: true },
     chatHistory: [messageSchema],
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
+    aliceInitiated: { type: Boolean, default: false }, // Assuming these are related to your reset logic
+    bobRespondedToAlice: { type: Boolean, default: false },
 });
 
 chatSessionSchema.pre('save', function (next) {

@@ -18,7 +18,7 @@ const PORT = 8000;
 // CORS configuration that allows credentials
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173", // Specify your frontend URL
+    origin: 'http://localhost:5173',
     credentials: true, // This is crucial for cookies/sessions!
   })
 );
@@ -35,29 +35,29 @@ app.use(session({
     resave: false,
     saveUninitialized: false,
     store: MongoStore.create({
-        mongoUrl: process.env.MONGO_URI,
-        collectionName: 'sessions',
-        checkPeriod: 86400000
+      mongoUrl: process.env.MONGO_URI,
+      collectionName: "sessions",
     }),
     cookie: {
-        secure: process.env.NODE_ENV === 'production',
-        httpOnly: true,
-        maxAge: 1000 * 60 * 60 * 24 * 7,
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax' // Important for cross-origin requests
-    }
-}));
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 1 week
+      httpOnly: true,
+      sameSite: "lax",
+      secure: false, // true if you're using HTTPS
+    },
+  }));
 console.log("Session middleware initialized");
 
-// Apply isAuthenticated middleware globally
+app.use(session({
+    // session config here
+  }));
 app.use(isAuthenticated);
-
-// Then track user or guest status
 app.use(trackUserOrGuest);
 
 // Set header for authenticated users
 app.use((req, res, next) => {
     if (req.session.userId) {
         res.setHeader('X-User-ID', req.session.userId);
+        console.log(`Setting X-User-ID header to ${req.session.userId}`);
     }
     next();
 });
@@ -77,3 +77,9 @@ app.get("/get-chat-history", (req, res) => {
 app.listen(PORT, () => {
     console.log(`The server is running on port ${PORT}`);
 });
+
+
+//TODO: Work on tool or prompt to stop asking user to confirm the flight they want to book from the information your provided.
+//TODO: prompt stiopped showing images when user asks for accommodation or sightseeing
+//TODO: WHEN CLIENT LOGOUT , CLIENT SIDE SHOULD CLEAR THE LOCAL STORAGE
+
