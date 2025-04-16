@@ -2,119 +2,83 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const User = require('../models/user');
-const chatSession = require('../models/chatSession');
 const { v4: uuidv4 } = require('uuid');
-
-
+const jwt = require('jsonwebtoken');
 
 router.post('/signup', async (req, res) => {
     try {
-        const { username, password, email } = req.body;ß
-        // Check if username already exists
+        const { username, password, email } = req.body;
+
         const existingUser = await User.findOne({ username });
-        if (existingUser) {
-            return res.status(400).json({ message: 'Username already exists' });
-        }
-        
-        // Check if email already exists
+        if (existingUser) return res.status(400).json({ message: 'Username already exists' });
+
         const existingEmail = await User.findOne({ email });
-        if (existingEmail) {
-            return res.status(400).json({ message: 'Email already exists' });
-        }
-        
-        const user = new User({ username, password, email });
+        if (existingEmail) return res.status(400).json({ message: 'Email already exists' });
+
+        const userId = uuidv4();
+        const user = new User({ username, password, email, userId });
         await user.save();
-        req.session.userId = user._id;
-        req.session.isAuthenticated = true;
-        res.status(201).json({ message: 'User registered successfully', userId: user._id });
+
+        const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h'});
+
+        res.status(201).json({ message: 'User registered successfully', userId: user.userId, token });
     } catch (error) {
         res.status(500).json({ message: 'Error registering user', error: error.message });
     }
 });
 
-
 router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(401).json({ message: 'User not found' });
-        }
+        const user = await User.findOne({email });
+        if (!user) return res.status(401).json({ message: 'User not found' });
+
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid username or password' });
-        }
+        if (!isMatch) return res.status(401).json({ message: 'Invalid password' });
 
-        // Check if the user already has a chatId
-        if (!user.chatId) {
-            // Generate a new chatId using uuid (assuming you have uuid imported)
-            // // Import uuid here if not already at the top
-            user.chatId = uuidv4();
-            await user.save(); // Save the updated user with the new chatId
-        }
+        const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET,{ expiresIn: '1h'});
 
-        req.session.userId = user._id;
-        req.session.isAuthenticated = true;
-        req.session.chatId = user.chatId; // Store chatId in the session
-        console.log("User logged in, session ID:", req.sessionID);
-        console.log("Session contents:", req.session);
+        res.cookie('token', token, { maxAge: 900000, httpOnly: true });
+        res.status(200).json({ message: 'Login successful', userId: user.userId, email: user.email, username : user.username });
+    } catch (error) {
+        res.status(500).json({ message: 'Error logging in', error: error.message });
+    }
+});
 
-        req.session.save(err => {
+router.get('/revalidate', (req, res) => {
+    const token = req.cookies.token;
+    if (!token) return res.status(401).json({ message: 'No token provided' });
+
+    try {
+        const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET,);
+        res.status(200).json({ message: 'Token is valid', userId: decoded.userId });
+    } catch (error) {
+        res.status(401).json({ message: 'Invalid or expired token' });
+    }
+});
+
+router.post('/logout', (req, res) => {
+    res.status(200).json({ message: 'Logged out successfully' });
+});
+
+
+router.post('/clear-chat-id', async (req, res) => {
+    if(req.session) {
+        req.session.chatId = null;
+        req.session.aliceInitiated = false;
+        req.session.bobRespondedToAlice = false;
+        req.session.save((err) => {
             if(err) {
                 console.error("session save error:", err);
                 return res.status(500).json({ message: 'Error saving session', error: err.message });
             }
-            // Set header *before* sending the final response
-            res.setHeader('X-User-ID', user._id.toString());
-
-            return res.status(200).json({ message: 'Login successful', userId: user._id, chatId: user.chatId }); // Send chatId in the response
-        });
-    } catch (error) {
-        return res.status(500).json({ message: 'Error logging in', error: error.message });
+            res.status(200).json({ message: 'ChatId cleared successfully' });
+        })
+    }else{
+        res.status(200).json({ message: 'No session found to clear chat state from' });
     }
-});
-
-router.post('/logout', async(req, res) => {
-    try {
-        req.session.destroy();
-        res.clearCookie('connect.sid');
-        res.status(200).json({ message: 'Logged out successfully' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error logging out', error: error.message });
-    }   
-});
-
-router.post('/reset-chat-state', async(req, res) => {
-    const {chatId} = req.body;
-
-    if(!chatId){
-        return res.status(400).json({ message: 'Chat ID is required' });
-    }
-
-    try{
-        const updatedSession = await chatSession.findOneAndUpdate
-        ({chatId: chatId},
-        {
-            aliceInitiated: false,
-            bobRespondedToAlice: false
-        },
-        {new: true}
-
-    );
-    if(updatedSession){
-        return res.status(200).json({ message: 'Chat state reset successfully' });
-
-    }  else {
-        return res.status(500).json({ message: 'Error resetting chat state' });
-    }
-
-    } catch (error) {
-        return res.status(500).json({ message: 'Error resetting chat state', error: error.message });
-    }
-});
-
-
-
+}
+);
 
 
 module.exports = router;

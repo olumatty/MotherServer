@@ -4,22 +4,20 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const { OpenAI } = require('openai');
-const chatSession = require('../models/chatSession');
+const ChatSession = require('../models/chatSession');
 const { getIataCodeFromCity } = require('../util/iata');
 const Prompt = require('../services/prompt');
 const dotenv = require('dotenv');
 const {isRateLimited,trackRequest} = require('../middleware/ratelimit');
+const Message = require('../models/message');
+const jwt = require('jsonwebtoken');
 
 
 dotenv.config();
 
-// Import your rate limiting functions
-
-// OpenAI client setup
 
 const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
 
-// Define Agents
 const AGENTS = {
     get_flight_information: {
         name: "Alice (Flight Agent)",
@@ -60,8 +58,8 @@ const tools = [
                     },
                     flight_type: {
                         type: "string",
-                        enum: ["Economy", "business-class"],
-                        description: "The type of flight: (Economy, business-class or first-class)"
+                        enum: ["ECONOMY", "BUSINESS-CLASS", "FIRST-CLASS", "PREMIUM-ECONOMY"],
+                        description: "The type of flight: (ECONOMY, BUSINESS-CLASS, FIRST-CLASS, PREMIUM-ECONOMY)"
                     },
                     number_of_passengers: {
                         type: "integer",
@@ -210,39 +208,15 @@ router.post('/', async (req, res) => {
     // Track this request for rate limiting purposes
     trackRequest(ip);
 
-    // Authentication and Session Handling
-    let sessionId = req.session.id;
-    let userId = req.session.userId || req.session.guestId;
-    let chatId = req.session.chatId;
-
-    if (!req.session.userId && !req.session.guestId) {
-        req.session.guestId = uuidv4();
-        userId = req.session.guestId;
-        console.log(`New guest session created: ${userId}`);
-        // Save the session to ensure guestId persists
-        await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
+    const token = req.headers['authorization']?.split(' ')[1];
+    let decoded = {};
+    try {
+        if (token) decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET,);
+    } catch (err) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    if (!chatId) {
-        chatId = uuidv4();
-        req.session.chatId = chatId;
-        await new Promise((resolve, reject) => req.session.save(err => err ? reject(err) : resolve()));
-        console.log(`New chatId generated: ${chatId}`);
-    }
-
-    console.log(`Using session: ${sessionId}, user: ${userId}, chat: ${chatId}`);
-
-    // Initialize chat history and agent initiation flags
-    if (!req.session.chatHistory) {
-        console.log("Initializing chat history");
-        req.session.chatHistory = [];
-    }
-    if (req.session.aliceInitiated === undefined) {
-        req.session.aliceInitiated = false;
-    }
-    if (req.session.bobRespondedToAlice === undefined) {
-        req.session.bobRespondedToAlice = false;
-    }
+    const userId = decoded.userId || uuidv4();
 
     try {
         const { messages } = req.body;
@@ -251,7 +225,7 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: "Messages must be a non-empty array" });
         }
 
-        const validMessages = messages.map(msg => ({ role: "user", content: msg.content })); // Ensure correct structure
+        const validMessages = messages.map(msg => ({ role: "user", content: msg.content }));
 
         const systemMessage = {
             role: "system",
@@ -340,14 +314,14 @@ router.post('/', async (req, res) => {
 
                     if (shouldExecuteTool) {
                         functionResult = await callAgentApi(functionName, apiParams);
-                        req.session.aliceInitiated = !functionResult?.error;
+                        aliceInitiated = !functionResult?.error;
                     } else if (!functionResult) {
                         functionResult = { error: "Could not process flight information request." };
                     }
                 } else if (functionName === 'get_accomodation') {
-                    if (req.session.aliceInitiated) {
+                    if (aliceInitiated) {
                         functionResult = await callAgentApi(functionName, apiParams);
-                        req.session.bobRespondedToAlice = !functionResult?.error;
+                        bobRespondedToAlice = !functionResult?.error;
                         shouldCallBob = true;
                     } else {
                         shouldExecuteTool = false;
@@ -355,7 +329,7 @@ router.post('/', async (req, res) => {
                         skippedBob = true;
                     }
                 } else if (functionName === 'get_sightSeeing') {
-                    if (req.session.aliceInitiated && req.session.bobRespondedToAlice) {
+                    if (aliceInitiated && bobRespondedToAlice) {
                         functionResult = await callAgentApi(functionName, apiParams);
                         shouldCallCharlie = true;
                     } else {
@@ -390,38 +364,56 @@ router.post('/', async (req, res) => {
 
             reply = response2.choices[0].message.content;
         }
+         // Save user reply to the Message model
+       // For saving user messages
+            for (const msg of validMessages) {
+                const newMessage = new Message({
+                    userId: userId,  
+                    role: msg.role,
+                    content: msg.content,
+                    timestamp: new Date()
+                });
+                await newMessage.save();
+            }
 
-        if (messages.length > 0) {
-            req.session.chatHistory.push({
-                role: 'user',
-                content: messages[messages.length - 1].content,
-                timestamp: messages[messages.length - 1].timestamp // Ensure timestamp is saved
+            // For saving assistant message
+            const newAssistantMessage = new Message({
+                userId: userId, 
+                role: 'assistant',
+                content: reply,
+                timestamp: new Date()
             });
-        }
+            await newAssistantMessage.save();
 
-        req.session.chatHistory.push({
-            role: 'assistant',
-            content: reply,
-            timestamp: new Date().toISOString() // Add timestamp to assistant message
-        });
+            if (!await ChatSession.findOne({ sessionId: sessionId })) {
+                // Create a new chat session
+                const firstUserMessageContent = validMessages[0]?.content;
+                const title = firstUserMessageContent?.length > 30
+                   ? `${firstUserMessageContent.substring(0, 30)}...`
+                : firstUserMessageContent || 'New Chat';
+                    
+                await ChatSession.create({
+                    sessionId: sessionId,
+                    userId: userId,
+                    title: title
+                });
+            }
 
         // Update or create chat session record in MongoDB
-        await chatSession.updateOne(
+        await ChatSession.updateOne(
             { sessionId: sessionId },
             {
                 userId: userId,
                 chatId: chatId,
-                chatHistory: req.session.chatHistory,
                 aliceInitiated: req.session.aliceInitiated,
                 bobRespondedToAlice: req.session.bobRespondedToAlice
             },
-            { upsert: true, new: true }
+            { upsert: true}
         );
         console.log("🔄 MongoDB update payload:", {
             sessionId: sessionId,
             userId: userId,
             chatId: chatId,
-            chatHistory: req.session.chatHistory,
             aliceInitiated: req.session.aliceInitiated,
             bobRespondedToAlice: req.session.bobRespondedToAlice
         });
@@ -432,7 +424,7 @@ router.post('/', async (req, res) => {
             userId: userId,
             sessionId: sessionId,
             chatId: chatId,
-            chatHistory: req.session.chatHistory,
+
             toolResults: toolResults.length > 0 ? toolResults : undefined
         });
 
