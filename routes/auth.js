@@ -38,7 +38,7 @@ router.post('/login', async (req, res) => {
 
         const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET,{ expiresIn: '1h'});
 
-        res.cookie('token', token, { maxAge: 900000, httpOnly: true });
+        res.cookie('token', token, { maxAge: 900000, httpOnly: true, secure: false } );
         res.status(200).json({ message: 'Login successful', userId: user.userId, email: user.email, username : user.username });
     } catch (error) {
         res.status(500).json({ message: 'Error logging in', error: error.message });
@@ -58,6 +58,7 @@ router.get('/revalidate', (req, res) => {
 });
 
 router.post('/logout', (req, res) => {
+    res.clearCookie('token'); // Clear the 'token' cookie
     res.status(200).json({ message: 'Logged out successfully' });
 });
 

@@ -1,54 +1,98 @@
-// routes/chat.js
 const express = require('express');
 const router = express.Router();
-const ChatSession = require('../models/chatSession');
-const Message = require('../models/message');
-const verifyToken = require('../middleware/auth');
+const { v4: uuidv4 } = require('uuid');
+const Conversation = require('../models/conversation');
+const authenticateToken = require('../middleware/auth');
 
-// Get chat history for the logged-in user
-router.get('/history', verifyToken, async (req, res) => {
-    const userId = req.user.userId;  // Extract userId from JWT
+router.post('/create', authenticateToken, async (req, res) => {
+  if (!req.user || !req.user.userId) {
+    return res.status(401).json({ message: 'Unauthorized: No user data' });
+  }
 
-    try {
-        const chatHistory = await ChatSession.find({ userId: userId })
-            .sort({ updatedAt: 'desc' })
-            .select('chatId updatedAt');
+  const { message } = req.body;
+  const conversationId = uuidv4();
+  const title = message.slice(0, 30);
 
-        res.status(200).json(chatHistory);
-    } catch (error) {
-        console.error('Error fetching chat history:', error);
-        res.status(500).json({ message: 'Failed to fetch chat history' });
-    }
+  try {
+    const newChat = await Conversation.create({
+      userId: req.user.userId,
+      conversationId,
+      title,
+      messages: [{ role: 'user', content: message }],
+    });
+
+    await newChat.save();
+    res.json({ conversationId });
+    console.log('🚀 New chat created:', newChat);
+  } catch (error) {
+    console.error('Error creating chat:', error);
+    res.status(500).json({ message: 'Error creating chat', error: error.message });
+  }
 });
 
-// Get messages for a specific chat ID
-router.get('/:chatId', verifyToken, async (req, res) => {
-    const { chatId } = req.params;
-    const userId = req.user.userId;  // Extract userId from JWT
+router.post('/:conversationId/message', authenticateToken, async (req, res) => {
+  if (!req.user || !req.user.userId) {
+    return res.status(401).json({ message: 'Unauthorized: No user data' });
+  }
 
-    console.log("Fetching chat for chatId:", chatId);
-    console.log("UserId from JWT:", userId);
+  const { conversationId } = req.params;
+  const { role, content, tool_call_id } = req.body;
 
-    try {
-        const chatSession = await ChatSession.findOne({ chatId: chatId, userId: userId });
+  try {
+    const chat = await Conversation.findOne({ conversationId, userId: req.user.userId });
+    if (!chat) return res.status(404).json({ message: 'Chat not found' });
 
-        if (!chatSession) {
-            return res.status(403).json({ message: 'Access denied to this chat' });
-        }
+    chat.messages.push({ role, content, tool_call_id });
+    chat.updatedAt = new Date();
+    await chat.save();
 
-        const messages = await Message.find({ chatId: chatId }).sort({ timestamp: 1 });
+    res.json({ message: 'Message added to chat' });
+    console.log('🚀 Message added to chat:', chat);
+  } catch (error) {
+    console.error('Error adding message:', error);
+    res.status(500).json({ message: 'Error adding message', error: error.message });
+  }
+});
 
-        const formattedMessages = messages.map(msg => ({
-            role: msg.role,
-            content: msg.content,
-            timestamp: msg.timestamp
-        }));
+router.get('/:userId/history', authenticateToken, async (req, res) => {
+  if (!req.user || !req.user.userId) {
+    return res.status(401).json({ message: 'Unauthorized: No user data' });
+  }
 
-        res.status(200).json(formattedMessages);
-    } catch (error) {
-        console.error('Error fetching messages for chat:', error);
-        res.status(500).json({ message: 'Failed to fetch messages' });
-    }
+  if (req.user.userId !== req.params.userId) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  try {
+    const history = await Conversation.find({ userId: req.user.userId })
+      .sort({ updatedAt: -1 })
+      .select('conversationId title updatedAt');
+
+    res.json(history);
+    console.log('🚀 History found:', history);
+  } catch (error) {
+    console.error('Error fetching history:', error);
+    res.status(500).json({ message: 'Error fetching history', error: error.message });
+  }
+});
+
+router.get('/:conversationId', authenticateToken, async (req, res) => {
+  if (!req.user || !req.user.userId) {
+    return res.status(401).json({ message: 'Unauthorized: No user data' });
+  }
+
+  const { conversationId } = req.params;
+
+  try {
+    const chat = await Conversation.findOne({ conversationId, userId: req.user.userId });
+    if (!chat) return res.status(404).json({ message: 'Chat not found' });
+
+    res.json(chat);
+    console.log('🚀 Chat found:', chat);
+  } catch (error) {
+    console.error('Error fetching chat:', error);
+    res.status(500).json({ message: 'Error fetching chat', error: error.message });
+  }
 });
 
 module.exports = router;

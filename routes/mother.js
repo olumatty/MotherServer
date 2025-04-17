@@ -4,17 +4,19 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
 const { OpenAI } = require('openai');
-const ChatSession = require('../models/chatSession');
+const Conversation = require('../models/conversation'); // Using your conversation schema
 const { getIataCodeFromCity } = require('../util/iata');
 const Prompt = require('../services/prompt');
 const dotenv = require('dotenv');
-const {isRateLimited,trackRequest} = require('../middleware/ratelimit');
-const Message = require('../models/message');
+const { isRateLimited, trackRequest } = require('../middleware/ratelimit');
 const jwt = require('jsonwebtoken');
-
+const authenticateToken = require('../middleware/auth');
 
 dotenv.config();
 
+// Global variables for tracking state between agents
+let aliceInitiated = false;
+let bobRespondedToAlice = false;
 
 const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
 
@@ -188,6 +190,7 @@ async function callAgentApi(toolName, parameters) {
     }
 }
 
+// Main travel agent endpoint
 router.post('/', async (req, res) => {
     const userApiKey = req.headers['x-user-openai-key'];
     const client = new OpenAI({ apiKey: userApiKey || process.env.OPENAI_API_KEY });
@@ -211,12 +214,13 @@ router.post('/', async (req, res) => {
     const token = req.headers['authorization']?.split(' ')[1];
     let decoded = {};
     try {
-        if (token) decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET,);
+        if (token) decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
     } catch (err) {
         return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
     const userId = decoded.userId || uuidv4();
+    const conversationId = req.body.conversationId || uuidv4();
 
     try {
         const { messages } = req.body;
@@ -225,14 +229,78 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: "Messages must be a non-empty array" });
         }
 
-        const validMessages = messages.map(msg => ({ role: "user", content: msg.content }));
+        const validMessages = messages.filter(msg => msg.content && msg.content.trim())
+                                     .map(msg => ({ role: "user", content: msg.content }));
+        
+        if (validMessages.length === 0) {
+            return res.status(400).json({ error: "No valid messages found" });
+        }
 
         const systemMessage = {
             role: "system",
             content: Prompt
         };
 
-        const finalMessages = [systemMessage, ...validMessages];
+        // Check if this is a new conversation or continuing an existing one
+        let conversation = await Conversation.findOne({ 
+            conversationId: conversationId,
+            userId: userId
+        });
+
+        // Claude-like behavior: Only create conversation when first message is sent
+        const isNewConversation = !conversation;
+        if (isNewConversation) {
+            // Create a new conversation with user's first message as title
+            const firstUserMessageContent = validMessages[0]?.content;
+            const title = firstUserMessageContent?.length > 30
+                ? `${firstUserMessageContent.substring(0, 30)}...`
+                : firstUserMessageContent || 'New Chat';
+                
+            conversation = new Conversation({
+                userId: userId,
+                conversationId: conversationId,
+                title: title,
+                messages: [], // Initialize with empty array to prevent undefined errors
+                createdAt: new Date(),
+                updatedAt: new Date()
+            });
+            
+            console.log("🚀 New conversation created:", { 
+                conversationId,
+                userId,
+                title: conversation.title
+            });
+        }
+
+        // Ensure messages array exists
+        if (!conversation.messages) {
+            conversation.messages = [];
+        }
+
+        // Get conversation history if it exists
+        let chatHistory = [];
+        if (conversation.messages && conversation.messages.length > 0) {
+            chatHistory = conversation.messages.map(msg => ({
+                role: msg.role,
+                content: msg.content,
+                ...(msg.tool_call_id ? { tool_call_id: msg.tool_call_id } : {})
+            }));
+        }
+
+        // Build messages to send to OpenAI
+        const finalMessages = [systemMessage, ...chatHistory];
+        
+        // Add the new user message(s)
+        for (const msg of validMessages) {
+            finalMessages.push(msg);
+            
+            // Also add to our conversation object
+            conversation.messages.push({
+                role: msg.role,
+                content: msg.content,
+                timestamp: new Date()
+            });
+        }
 
         const completion = await client.chat.completions.create({
             model: "gpt-4-turbo",
@@ -245,13 +313,24 @@ router.post('/', async (req, res) => {
         let assistantMessage = completion.choices[0].message;
         let reply = assistantMessage.content;
         let toolResults = [];
-        let shouldCallBob = false;
-        let shouldCallCharlie = false;
-        let skippedBob = false;
-        let skippedCharlie = false;
-
+        
         if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+            // Add the assistant's tool call message to our messages array
             finalMessages.push(assistantMessage);
+            
+            // Store tool calls in conversation
+            conversation.messages.push({
+                role: "assistant",
+                content: assistantMessage.content || "",
+                tool_calls: assistantMessage.tool_calls.map(tc => ({
+                    id: tc.id,
+                    function: {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments
+                    }
+                })),
+                timestamp: new Date()
+            });
 
             for (const toolCall of assistantMessage.tool_calls) {
                 const functionName = toolCall.function.name;
@@ -322,20 +401,16 @@ router.post('/', async (req, res) => {
                     if (aliceInitiated) {
                         functionResult = await callAgentApi(functionName, apiParams);
                         bobRespondedToAlice = !functionResult?.error;
-                        shouldCallBob = true;
                     } else {
                         shouldExecuteTool = false;
                         functionResult = { status: "pending", reason: "flight_details_needed" };
-                        skippedBob = true;
                     }
                 } else if (functionName === 'get_sightSeeing') {
                     if (aliceInitiated && bobRespondedToAlice) {
                         functionResult = await callAgentApi(functionName, apiParams);
-                        shouldCallCharlie = true;
                     } else {
                         shouldExecuteTool = false;
                         functionResult = { status: "pending", reason: "flight_and_accommodation_needed" };
-                        skippedCharlie = true;
                     }
                 } else {
                     functionResult = { error: `Unknown tool: ${functionName}` };
@@ -348,14 +423,26 @@ router.post('/', async (req, res) => {
                     result: functionResult
                 });
 
-                finalMessages.push({
+                // Add the tool response to our messages array
+                const toolMessage = {
                     role: "tool",
                     tool_call_id: toolCall.id,
                     name: functionName,
                     content: JSON.stringify(functionResult)
+                };
+                
+                finalMessages.push(toolMessage);
+                
+                // Store in conversation
+                conversation.messages.push({
+                    role: "tool",
+                    content: JSON.stringify(functionResult),
+                    tool_call_id: toolCall.id,
+                    timestamp: new Date()
                 });
             }
 
+            // Get final response from OpenAI
             const response2 = await client.chat.completions.create({
                 model: "gpt-4-turbo",
                 messages: finalMessages,
@@ -364,67 +451,32 @@ router.post('/', async (req, res) => {
 
             reply = response2.choices[0].message.content;
         }
-         // Save user reply to the Message model
-       // For saving user messages
-            for (const msg of validMessages) {
-                const newMessage = new Message({
-                    userId: userId,  
-                    role: msg.role,
-                    content: msg.content,
-                    timestamp: new Date()
-                });
-                await newMessage.save();
-            }
 
-            // For saving assistant message
-            const newAssistantMessage = new Message({
-                userId: userId, 
-                role: 'assistant',
-                content: reply,
-                timestamp: new Date()
-            });
-            await newAssistantMessage.save();
-
-            if (!await ChatSession.findOne({ sessionId: sessionId })) {
-                // Create a new chat session
-                const firstUserMessageContent = validMessages[0]?.content;
-                const title = firstUserMessageContent?.length > 30
-                   ? `${firstUserMessageContent.substring(0, 30)}...`
-                : firstUserMessageContent || 'New Chat';
-                    
-                await ChatSession.create({
-                    sessionId: sessionId,
-                    userId: userId,
-                    title: title
-                });
-            }
-
-        // Update or create chat session record in MongoDB
-        await ChatSession.updateOne(
-            { sessionId: sessionId },
-            {
-                userId: userId,
-                chatId: chatId,
-                aliceInitiated: req.session.aliceInitiated,
-                bobRespondedToAlice: req.session.bobRespondedToAlice
-            },
-            { upsert: true}
-        );
-        console.log("🔄 MongoDB update payload:", {
-            sessionId: sessionId,
+        // Add assistant's final response to conversation
+        conversation.messages.push({
+            role: "assistant",
+            content: reply,
+            timestamp: new Date()
+        });
+        
+        // Update conversation timestamps
+        conversation.updatedAt = new Date();
+        
+        // Save conversation to database
+        await conversation.save();
+        
+        console.log("🚀 Conversation updated:", {
+            conversationId: conversationId,
             userId: userId,
-            chatId: chatId,
-            aliceInitiated: req.session.aliceInitiated,
-            bobRespondedToAlice: req.session.bobRespondedToAlice
+            aliceInitiated,
+            bobRespondedToAlice
         });
 
         res.setHeader('X-User-ID', userId);
         res.status(200).json({
             reply: reply,
             userId: userId,
-            sessionId: sessionId,
-            chatId: chatId,
-
+            conversationId: conversationId,
             toolResults: toolResults.length > 0 ? toolResults : undefined
         });
 
