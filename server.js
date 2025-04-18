@@ -14,6 +14,9 @@ dotenv.config();
 const app = express();
 const PORT = 8000;
 
+
+app.use(express.json());
+app.use(cookieParser());
 // CORS configuration that allows credentials
 app.use(
   cors({
@@ -22,8 +25,7 @@ app.use(
   })
 );
 
-app.use(express.json());
-app.use(cookieParser());
+
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))

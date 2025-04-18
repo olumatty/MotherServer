@@ -12,7 +12,7 @@ const conversationSchema = new mongoose.Schema({
     userId:{type:String, required: true},
     conversationId:{type:String, required: true},
     title:{type:String},
-    messges:[messageSchema],
+    messages:[messageSchema],
     createdAt:{type:Date, default: Date.now},
     updatedAt:{type:Date, default: Date.now},
 });

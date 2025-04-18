@@ -38,7 +38,12 @@ router.post('/login', async (req, res) => {
 
         const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET,{ expiresIn: '1h'});
 
-        res.cookie('token', token, { maxAge: 900000, httpOnly: true, secure: false } );
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: false, 
+            sameSite: 'Lax',
+            maxAge: 24 * 60 * 60 * 1000, // 1 day
+          });
         res.status(200).json({ message: 'Login successful', userId: user.userId, email: user.email, username : user.username });
     } catch (error) {
         res.status(500).json({ message: 'Error logging in', error: error.message });

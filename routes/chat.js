@@ -95,4 +95,29 @@ router.get('/:conversationId', authenticateToken, async (req, res) => {
   }
 });
 
+router.delete('/:conversationId', authenticateToken, async (req, res) => {
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ message: 'Unauthorized: No user data' });
+    }
+  
+    const { conversationId } = req.params;
+  
+    try {
+      const deletedResult = await Conversation.deleteOne({
+        conversationId: conversationId,
+        userId: req.user.userId,
+      });
+  
+      if (deletedResult.deletedCount > 0) {
+        res.json({ message: 'Chat conversation deleted successfully', deletedCount: deletedResult.deletedCount });
+        console.log('🚀 Chat conversation deleted:', conversationId, 'for user:', req.user.userId);
+      } else {
+        res.status(404).json({ message: 'Chat conversation not found or you do not have permission to delete it.' });
+      }
+    } catch (error) {
+      console.error('Error deleting chat conversation:', error);
+      res.status(500).json({ message: 'Error deleting chat conversation', error: error.message });
+    }
+  });
+
 module.exports = router;

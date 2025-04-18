@@ -15,8 +15,7 @@ const authenticateToken = require('../middleware/auth');
 dotenv.config();
 
 // Global variables for tracking state between agents
-let aliceInitiated = false;
-let bobRespondedToAlice = false;
+
 
 const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
 
@@ -192,6 +191,10 @@ async function callAgentApi(toolName, parameters) {
 
 // Main travel agent endpoint
 router.post('/', async (req, res) => {
+    
+    let aliceInitiated = false;
+    let bobRespondedToAlice = false;
+
     const userApiKey = req.headers['x-user-openai-key'];
     const client = new OpenAI({ apiKey: userApiKey || process.env.OPENAI_API_KEY });
 
