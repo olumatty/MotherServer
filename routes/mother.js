@@ -14,9 +14,6 @@ const authenticateToken = require('../middleware/auth');
 
 dotenv.config();
 
-// Global variables for tracking state between agents
-
-
 const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
 
 const AGENTS = {
@@ -190,8 +187,12 @@ async function callAgentApi(toolName, parameters) {
 }
 
 // Main travel agent endpoint
-router.post('/', async (req, res) => {
-    
+router.post('/', authenticateToken, async (req, res) => {
+
+    if (!req.user || !req.user.userId) {
+        return res.status(401).json({ message: 'Unauthorized: No user data' });
+    }
+
     let aliceInitiated = false;
     let bobRespondedToAlice = false;
 
@@ -214,15 +215,7 @@ router.post('/', async (req, res) => {
     // Track this request for rate limiting purposes
     trackRequest(ip);
 
-    const token = req.headers['authorization']?.split(' ')[1];
-    let decoded = {};
-    try {
-        if (token) decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-    } catch (err) {
-        return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    const userId = decoded.userId || uuidv4();
+    const userId = req.user.userId;
     const conversationId = req.body.conversationId || uuidv4();
 
     try {
@@ -250,7 +243,6 @@ router.post('/', async (req, res) => {
             userId: userId
         });
 
-        // Claude-like behavior: Only create conversation when first message is sent
         const isNewConversation = !conversation;
         if (isNewConversation) {
             // Create a new conversation with user's first message as title
@@ -431,7 +423,8 @@ router.post('/', async (req, res) => {
                     role: "tool",
                     tool_call_id: toolCall.id,
                     name: functionName,
-                    content: JSON.stringify(functionResult)
+                    content: JSON.stringify(functionResult),
+                    timestamp: new Date()
                 };
                 
                 finalMessages.push(toolMessage);

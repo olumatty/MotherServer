@@ -68,23 +68,4 @@ router.post('/logout', (req, res) => {
 });
 
 
-router.post('/clear-chat-id', async (req, res) => {
-    if(req.session) {
-        req.session.chatId = null;
-        req.session.aliceInitiated = false;
-        req.session.bobRespondedToAlice = false;
-        req.session.save((err) => {
-            if(err) {
-                console.error("session save error:", err);
-                return res.status(500).json({ message: 'Error saving session', error: err.message });
-            }
-            res.status(200).json({ message: 'ChatId cleared successfully' });
-        })
-    }else{
-        res.status(200).json({ message: 'No session found to clear chat state from' });
-    }
-}
-);
-
-
 module.exports = router;

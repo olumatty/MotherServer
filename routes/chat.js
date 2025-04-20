@@ -18,15 +18,18 @@ router.post('/create', authenticateToken, async (req, res) => {
       userId: req.user.userId,
       conversationId,
       title,
-      messages: [{ role: 'user', content: message }],
+      messages: [{ role: 'user', content: message, timestamp: new Date() }],
     });
 
     await newChat.save();
     res.json({ conversationId });
     console.log('🚀 New chat created:', newChat);
   } catch (error) {
-    console.error('Error creating chat:', error);
-    res.status(500).json({ message: 'Error creating chat', error: error.message });
+    console.error('Error processing request:', error);
+    res.status(500).json({ 
+      error: "An error occurred while processing your request", 
+      details: error.message 
+    });
   }
 });
 
@@ -42,15 +45,23 @@ router.post('/:conversationId/message', authenticateToken, async (req, res) => {
     const chat = await Conversation.findOne({ conversationId, userId: req.user.userId });
     if (!chat) return res.status(404).json({ message: 'Chat not found' });
 
-    chat.messages.push({ role, content, tool_call_id });
+    chat.messages.push({ 
+        role, 
+        content,
+        timestamp:new Date(),
+        ...tool_call_id ? {tool_call_id}: {}
+    });
     chat.updatedAt = new Date();
     await chat.save();
 
     res.json({ message: 'Message added to chat' });
     console.log('🚀 Message added to chat:', chat);
   } catch (error) {
-    console.error('Error adding message:', error);
-    res.status(500).json({ message: 'Error adding message', error: error.message });
+    console.error('Error processing request:', error);
+    res.status(500).json({ 
+      error: "An error occurred while processing your request", 
+      details: error.message 
+    });
   }
 });
 
@@ -71,8 +82,11 @@ router.get('/:userId/history', authenticateToken, async (req, res) => {
     res.json(history);
     console.log('🚀 History found:', history);
   } catch (error) {
-    console.error('Error fetching history:', error);
-    res.status(500).json({ message: 'Error fetching history', error: error.message });
+    console.error('Error processing request:', error);
+    res.status(500).json({ 
+      error: "An error occurred while processing your request", 
+      details: error.message 
+    });
   }
 });
 
@@ -91,7 +105,10 @@ router.get('/:conversationId', authenticateToken, async (req, res) => {
     console.log('🚀 Chat found:', chat);
   } catch (error) {
     console.error('Error fetching chat:', error);
-    res.status(500).json({ message: 'Error fetching chat', error: error.message });
+    res.status(500).json({ 
+        error: "An error occurred while processing your request", 
+        details: error.message 
+      });
   }
 });
 
@@ -99,7 +116,7 @@ router.delete('/:conversationId', authenticateToken, async (req, res) => {
     if (!req.user || !req.user.userId) {
       return res.status(401).json({ message: 'Unauthorized: No user data' });
     }
-  
+    
     const { conversationId } = req.params;
   
     try {
@@ -116,7 +133,10 @@ router.delete('/:conversationId', authenticateToken, async (req, res) => {
       }
     } catch (error) {
       console.error('Error deleting chat conversation:', error);
-      res.status(500).json({ message: 'Error deleting chat conversation', error: error.message });
+      res.status(500).json({ 
+        error: "An error occurred while processing your request", 
+        details: error.message 
+      });
     }
   });
 
