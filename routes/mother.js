@@ -13,8 +13,6 @@ const authenticateToken = require('../middleware/auth');
 
 dotenv.config();
 
-const temperature = parseFloat(process.env.API_TEMPERATURE) || 0.7;
-
 const AGENTS = {
     get_flight_information: {
         name: "Alice (Flight Agent)",
@@ -33,78 +31,84 @@ const AGENTS = {
 // Correctly formatted tools for Gemini API (using function calling schema)
 const tools = [
     {
-        name: "get_flight_information",
-        description: "Get flight information from Alice (Flight Agent) based on user input",
-        parameters: {
-            type: "object",
-            properties: {
-                departure_location: {
-                    type: "string",
-                    description: "The location or airport where the flight is departing from (e.g. BOM, DEL, LOS, DXB, NYK).airport"
-                },
-                destination: {
-                    type: "string",
-                    description: "The destination city or airport (e.g. BOM, DEL, LOS, DXB, NYK ).airport",
-                },
-                departure_date: {
-                    type: "string",
-                    format: "date",
-                    description: "The date of departure inYYYY-MM-DD format"
-                },
-                flight_type: {
-                    type: "string",
-                    enum: ["ECONOMY", "BUSINESS-CLASS", "FIRST-CLASS", "PREMIUM-ECONOMY"],
-                    description: "The type of flight: (ECONOMY, BUSINESS-CLASS, FIRST-CLASS, PREMIUM-ECONOMY)"
-                },
-                number_of_passengers: {
-                    type: "integer",
-                    description: "The number of passengers for the flight"
-                },
-            },
-            required: ["departure_location", "destination", "departure_date", "flight_type", "number_of_passengers"],
-            additionalProperties: false
-        }
-    },
-    {
-        name: "get_accomodation",
-        description: "Get accommodation options from Bob (Accommodation Agent) at user destination location, checkInDate and checkOutDate",
-        parameters: {
-            type: "object",
-            properties: {
-                destination: {
-                    type: "string",
-                    description: "The destination city or location and the country for accommodation(e.g Lagos, Nigeria or London, UK)",
-                },
-                checkInDate: {
-                    type: "string",
-                    format: "date",
-                    description: "The date of check-in inYYYY-MM-DD format"
-                },
-                checkOutDate: {
-                    type: "string",
-                    format: "date",
-                    description: "The date of check-out inYYYY-MM-DD format"
+        function_declarations: [
+            {
+                name: "get_flight_information",
+                description: "Get flight information from Alice (Flight Agent) based on user input",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        departure_location: {
+                            type: "string",
+                            description: "The location or airport where the flight is departing from (e.g. BOM, DEL, LOS, DXB, NYK).airport"
+                        },
+                        destination: {
+                            type: "string",
+                            description: "The destination city or airport (e.g. BOM, DEL, LOS, DXB, NYK ).airport",
+                        },
+                        departure_date: {
+                            type: "string",
+                            description: "The date of departure inYYYY-MM-DD format"
+                        },
+                        flight_type: {
+                            type: "string",
+                            enum: ["ECONOMY", "BUSINESS-CLASS", "FIRST-CLASS", "PREMIUM-ECONOMY"],
+                            description: "The type of flight: (ECONOMY, BUSINESS-CLASS, FIRST-CLASS, PREMIUM-ECONOMY)"
+                        },
+                        number_of_passengers: {
+                            type: "integer",
+                            description: "The number of passengers for the flight"
+                        },
+                    },
+                    required: ["departure_location", "destination", "departure_date", "flight_type", "number_of_passengers"]
                 }
-
-            },
-            required: ["destination", "checkInDate", "checkOutDate"],
-            additionalProperties: false
-        }
+            }
+        ]
     },
     {
-        name: "get_sightSeeing",
-        description: "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
-        parameters: {
-            type: "object",
-            properties: {
-                destination: {
-                    type: "string",
-                    description: "The destination city or location for sightseeing recommendations",
-                },
-            },
-            required: ['destination'],
-            additionalProperties: false
-        }
+        function_declarations: [
+            {
+                name: "get_accomodation",
+                description: "Get accommodation options from Bob (Accommodation Agent) at user destination location, checkInDate and checkOutDate",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        destination: {
+                            type: "string",
+                            description: "The destination city or location and the country for accommodation(e.g Lagos, Nigeria or London, UK)",
+                        },
+                        checkInDate: {
+                            type: "string",
+                            description: "The date of check-in inYYYY-MM-DD format"
+                        },
+                        checkOutDate: {
+                            type: "string",
+                            description: "The date of check-out inYYYY-MM-DD format"
+                        }
+
+                    },
+                    required: ["destination", "checkInDate", "checkOutDate"]
+                }
+            }
+        ]
+    },
+    {
+        function_declarations: [
+            {
+                name: "get_sightSeeing",
+                description: "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        destination: {
+                            type: "string",
+                            description: "The destination city or location for sightseeing recommendations",
+                        },
+                    },
+                    required: ['destination']
+                }
+            }
+        ]
     }
 ];
 
@@ -189,27 +193,36 @@ router.post('/', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const conversationId = req.body.conversationId || uuidv4();
     const geminiApiKey = req.headers['x-user-gemini-key'] || process.env.GEMINI_API_KEY;
-    const genAI = new GoogleGenerativeAI(geminiApiKey);
-    const geminiModel = genAI.geminiPro; 
 
     try {
+        // Check if API key is valid
+        if (!geminiApiKey) {
+            throw new Error("Missing Gemini API key. Please provide a valid API key.");
+        }
+
+        // Initialize the Gemini client
+        const genAI = new GoogleGenerativeAI(geminiApiKey);
+
+        // Get the model using getGenerativeModel method
+        const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+        // Add debug logging to confirm model is correctly initialized
+        console.log("genAI initialized:", !!genAI);
+        console.log("geminiModel initialized:", !!geminiModel);
+
         const { messages } = req.body;
 
         if (!Array.isArray(messages) || messages.length === 0) {
             return res.status(400).json({ error: "Messages must be a non-empty array" });
         }
 
+        // Make a copy of messages to avoid modifying the original
         const validMessages = messages.filter(msg => msg.content && msg.content.trim())
             .map(msg => ({ role: "user", parts: [{ text: msg.content }] }));
 
         if (validMessages.length === 0) {
             return res.status(400).json({ error: "No valid messages found" });
         }
-
-        const systemMessage = {
-            role: "system",
-            parts: [{ text: Prompt }]
-        };
 
         // Check if this is a new conversation or continuing an existing one
         let conversation = await Conversation.findOne({
@@ -239,6 +252,12 @@ router.post('/', authenticateToken, async (req, res) => {
                 userId,
                 title: conversation.title
             });
+
+            // For new conversations, prepend the system prompt to the first user message
+            // This is the key fix to make it work with Gemini's API which doesn't support system messages
+            if (validMessages.length > 0) {
+                validMessages[0].parts[0].text = `<span class="math-inline">\{Prompt\}\\n\\n</span>{validMessages[0].parts[0].text}`;
+            }
         }
 
         // Ensure messages array exists
@@ -250,14 +269,14 @@ router.post('/', authenticateToken, async (req, res) => {
         let chatHistory = [];
         if (conversation.messages && conversation.messages.length > 0) {
             chatHistory = conversation.messages.map(msg => ({
-                role: msg.role,
+                role: msg.role === "system" ? "user" : (msg.role === "assistant" ? "model" : msg.role),
                 parts: [{ text: msg.content }],
                 ...(msg.tool_calls ? { tool_calls: msg.tool_calls } : {})
             }));
         }
 
-        // Build messages to send to Gemini
-        const finalMessages = [systemMessage, ...chatHistory];
+        // Build messages to send to Gemini - without a system message
+        const finalMessages = [...chatHistory];
 
         // Add the new user message(s)
         for (const msg of validMessages) {
@@ -271,36 +290,50 @@ router.post('/', authenticateToken, async (req, res) => {
             });
         }
 
+        // Create a chat session using the correct API method
+        // Note: We're not including a system message in history anymore
         const chat = geminiModel.startChat({
             history: finalMessages,
-            generationConfig: {
-                temperature: temperature,
-            },
-            tools: [{ function_declarations: tools }],
+            tools: tools
         });
 
-        const result = await chat.sendMessageStream(validMessages.slice(-1));
+        const result = await chat.sendMessageStream(validMessages.slice(-1)[0].parts[0].text);
         let assistantResponse = '';
         let currentToolCalls = [];
-        let finalResponse = null;
 
-        for await (const chunk of result) {
-            const chunkData = chunk.candidates?.[0]?.content?.parts?.[0];
-            if (chunkData?.text) {
-                assistantResponse += chunkData.text;
-            }
-            const toolCalls = chunk.candidates?.[0]?.content?.tool_calls;
-            if (toolCalls && toolCalls.length > 0) {
-                currentToolCalls.push(...toolCalls);
+        for await (const chunk of result.stream) {
+            console.log("--- Stream Chunk ---");
+            console.log(chunk);
+            
+            // Check if chunk has candidates
+            if (chunk.candidates && chunk.candidates.length > 0) {
+                const candidate = chunk.candidates[0];
+                if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
+                    for (const part of candidate.content.parts) {
+                        if (part.text && typeof part.text === 'string') {
+                            assistantResponse += part.text;
+                        } else if (part.functionCall) {
+                            // Handle tool calls
+                            currentToolCalls.push({
+                                id: part.functionCall.id || uuidv4(),
+                                function: {
+                                    name: part.functionCall.name,
+                                    arguments: JSON.stringify(part.functionCall.args)
+                                }
+                            });
+                        }
+                    }
+                }
             }
         }
-
+        console.log("Assistant Response (after stream):", assistantResponse);
+        console.log("Assistant Response (after stream):", assistantResponse);
         let reply = assistantResponse;
         let toolResults = [];
 
         if (currentToolCalls.length > 0) {
             finalMessages.push({
-                role: "assistant",
+                role: "model",
                 parts: [{ text: assistantResponse }],
                 tool_calls: currentToolCalls.map(tc => ({
                     id: tc.id,
@@ -327,7 +360,10 @@ router.post('/', authenticateToken, async (req, res) => {
 
             for (const toolCall of currentToolCalls) {
                 const functionName = toolCall.function.name;
-                const functionArgs = toolCall.function.parameters;
+                const functionArgs = typeof toolCall.function.arguments === 'string'
+                    ? JSON.parse(toolCall.function.arguments)
+                    : toolCall.function.arguments;
+
                 const agentName = AGENTS[functionName]?.name || functionName;
 
                 console.log(`Calling ${agentName} with args:`, functionArgs);
@@ -439,21 +475,32 @@ router.post('/', authenticateToken, async (req, res) => {
             // Get final response from Gemini
             try {
                 const response2 = await geminiModel.generateContent({
-                    model: "gemini-pro",
                     contents: finalMessages,
-                    generationConfig: {
-                        temperature: temperature,
-                    }
                 });
-
-                const finalResponseData = response2.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+                console.log("--- Final generateContent Response ---");
+                console.log(response2);
+                
+                let finalResponseData = '';
+                if (
+                    response2.response &&
+                    response2.response.candidates &&
+                    response2.response.candidates[0] &&
+                    response2.response.candidates[0].content &&
+                    response2.response.candidates[0].content.parts &&
+                    response2.response.candidates[0].content.parts[0] &&
+                    response2.response.candidates[0].content.parts[0].text
+                ) {
+                    finalResponseData = response2.response.candidates[0].content.parts[0].text;
+                }
+                
+                console.log("Final Response Data:", finalResponseData);
                 reply = finalResponseData || 'No final response from model after tool calls.';
             } catch (error) {
                 console.error("Error generating final response:", error);
                 reply = "Error generating final response after processing tools.";
             }
         }
-        /// Add assistant's final response to conversation
+        // Add assistant's final response to conversation
         conversation.messages.push({
             role: "assistant",
             content: reply,
