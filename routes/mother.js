@@ -3,13 +3,12 @@ const router = express.Router();
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const moment = require('moment');
-const { OpenAI } = require('openai');
-const Conversation = require('../models/conversation'); // Using your conversation schema
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Conversation = require('../models/conversation');
 const { getIataCodeFromCity } = require('../util/iata');
 const Prompt = require('../services/prompt');
 const dotenv = require('dotenv');
 const { isRateLimited, trackRequest } = require('../middleware/ratelimit');
-const jwt = require('jsonwebtoken');
 const authenticateToken = require('../middleware/auth');
 
 dotenv.config();
@@ -31,89 +30,80 @@ const AGENTS = {
     }
 };
 
-// Correctly formatted tools for OpenAI API
+// Correctly formatted tools for Gemini API (using function calling schema)
 const tools = [
     {
-        type: "function",
-        function: {
-            name: "get_flight_information",
-            description: "Get flight information from Alice (Flight Agent) based on user input",
-            parameters: {
-                type: "object",
-                properties: {
-                    departure_location: {
-                        type: "string",
-                        description: "The location or airport where the flight is departing from (e.g. BOM, DEL, LOS, DXB, NYK).airport"
-                    },
-                    destination: {
-                        type: "string",
-                        description: "The destination city or airport (e.g. BOM, DEL, LOS, DXB, NYK ).airport",
-                    },
-                    departure_date: {
-                        type: "string",
-                        format: "date",
-                        description: "The date of departure in YYYY-MM-DD format"
-                    },
-                    flight_type: {
-                        type: "string",
-                        enum: ["ECONOMY", "BUSINESS-CLASS", "FIRST-CLASS", "PREMIUM-ECONOMY"],
-                        description: "The type of flight: (ECONOMY, BUSINESS-CLASS, FIRST-CLASS, PREMIUM-ECONOMY)"
-                    },
-                    number_of_passengers: {
-                        type: "integer",
-                        description: "The number of passengers for the flight"
-                    },
+        name: "get_flight_information",
+        description: "Get flight information from Alice (Flight Agent) based on user input",
+        parameters: {
+            type: "object",
+            properties: {
+                departure_location: {
+                    type: "string",
+                    description: "The location or airport where the flight is departing from (e.g. BOM, DEL, LOS, DXB, NYK).airport"
                 },
-                required: ["departure_location", "destination", "departure_date", "flight_type", "number_of_passengers"],
-                additionalProperties: false
-            }
+                destination: {
+                    type: "string",
+                    description: "The destination city or airport (e.g. BOM, DEL, LOS, DXB, NYK ).airport",
+                },
+                departure_date: {
+                    type: "string",
+                    format: "date",
+                    description: "The date of departure inYYYY-MM-DD format"
+                },
+                flight_type: {
+                    type: "string",
+                    enum: ["ECONOMY", "BUSINESS-CLASS", "FIRST-CLASS", "PREMIUM-ECONOMY"],
+                    description: "The type of flight: (ECONOMY, BUSINESS-CLASS, FIRST-CLASS, PREMIUM-ECONOMY)"
+                },
+                number_of_passengers: {
+                    type: "integer",
+                    description: "The number of passengers for the flight"
+                },
+            },
+            required: ["departure_location", "destination", "departure_date", "flight_type", "number_of_passengers"],
+            additionalProperties: false
         }
     },
     {
-        type: "function",
-        function: {
-            name: "get_accomodation",
-            description: "Get accommodation options from Bob (Accommodation Agent) at user destination location, checkInDate and checkOutDate",
-            parameters: {
-                type: "object",
-                properties: {
-                    destination: {
-                        type: "string",
-                        description: "The destination city or location and the country for accommodation(e.g Lagos, Nigeria or London, UK)",
-                    },
-                    checkInDate: {
-                        type: "string",
-                        format: "date",
-                        description: "The date of check-in in YYYY-MM-DD format"
-                    },
-                    checkOutDate: {
-                        type: "string",
-                        format: "date",
-                        description: "The date of check-out in YYYY-MM-DD format"
-                    }
+        name: "get_accomodation",
+        description: "Get accommodation options from Bob (Accommodation Agent) at user destination location, checkInDate and checkOutDate",
+        parameters: {
+            type: "object",
+            properties: {
+                destination: {
+                    type: "string",
+                    description: "The destination city or location and the country for accommodation(e.g Lagos, Nigeria or London, UK)",
+                },
+                checkInDate: {
+                    type: "string",
+                    format: "date",
+                    description: "The date of check-in inYYYY-MM-DD format"
+                },
+                checkOutDate: {
+                    type: "string",
+                    format: "date",
+                    description: "The date of check-out inYYYY-MM-DD format"
+                }
 
-                },
-                required: ["destination", "checkInDate", "checkOutDate"],
-                additionalProperties: false
-            }
+            },
+            required: ["destination", "checkInDate", "checkOutDate"],
+            additionalProperties: false
         }
     },
     {
-        type: "function",
-        function: {
-            name: "get_sightSeeing",
-            description: "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
-            parameters: {
-                type: "object",
-                properties: {
-                    destination: {
-                        type: "string",
-                        description: "The destination city or location for sightseeing recommendations",
-                    },
+        name: "get_sightSeeing",
+        description: "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
+        parameters: {
+            type: "object",
+            properties: {
+                destination: {
+                    type: "string",
+                    description: "The destination city or location for sightseeing recommendations",
                 },
-                required: ['destination'],
-                additionalProperties: false
-            }
+            },
+            required: ['destination'],
+            additionalProperties: false
         }
     }
 ];
@@ -125,12 +115,12 @@ function parseAndValidateDate(dateString) {
     if (!parsedDate.isValid()) {
         parsedDate = moment(dateString);
         if (!parsedDate.isValid()) {
-            return { error: `Could not parse date: ${dateString}. Please use YYYY-MM-DD format.` };
+            return { error: `Could not parse date: ${dateString}. Please useYYYY-MM-DD format.` };
         }
     }
 
     if (parsedDate.isBefore(currentDate, 'day')) {
-        console.warn(`Departure date "${dateString}" is in the past. Assuming current year (${currentDate.year()}).`);
+        console.warn(`Departure date "<span class="math-inline">\{dateString\}" is in the past\. Assuming current year \(</span>{currentDate.year()}).`);
         console.log(`Original date: ${dateString}, Parsed date: ${parsedDate.format('YYYY-MM-DD')}`);
         parsedDate.year(currentDate.year());
     }
@@ -196,27 +186,11 @@ router.post('/', authenticateToken, async (req, res) => {
     let aliceInitiated = false;
     let bobRespondedToAlice = false;
 
-    const userApiKey = req.headers['x-user-openai-key'];
-    const client = new OpenAI({ apiKey: userApiKey || process.env.OPENAI_API_KEY });
-
-    const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-        req.socket.remoteAddress ||
-        'local';
-
-    // Check if the request is rate limited
-    if (isRateLimited(ip)) {
-        return res.status(429).json({
-            error: "Too many requests",
-            message: "Please try again after 1 hour",
-            retryAfter: 3600 // seconds (1 hour)
-        });
-    }
-
-    // Track this request for rate limiting purposes
-    trackRequest(ip);
-
     const userId = req.user.userId;
     const conversationId = req.body.conversationId || uuidv4();
+    const geminiApiKey = req.headers['x-user-gemini-key'] || process.env.GEMINI_API_KEY;
+    const genAI = new GoogleGenerativeAI(geminiApiKey);
+    const geminiModel = genAI.geminiPro; 
 
     try {
         const { messages } = req.body;
@@ -226,19 +200,19 @@ router.post('/', authenticateToken, async (req, res) => {
         }
 
         const validMessages = messages.filter(msg => msg.content && msg.content.trim())
-                                     .map(msg => ({ role: "user", content: msg.content }));
-        
+            .map(msg => ({ role: "user", parts: [{ text: msg.content }] }));
+
         if (validMessages.length === 0) {
             return res.status(400).json({ error: "No valid messages found" });
         }
 
         const systemMessage = {
             role: "system",
-            content: Prompt
+            parts: [{ text: Prompt }]
         };
 
         // Check if this is a new conversation or continuing an existing one
-        let conversation = await Conversation.findOne({ 
+        let conversation = await Conversation.findOne({
             conversationId: conversationId,
             userId: userId
         });
@@ -246,21 +220,21 @@ router.post('/', authenticateToken, async (req, res) => {
         const isNewConversation = !conversation;
         if (isNewConversation) {
             // Create a new conversation with user's first message as title
-            const firstUserMessageContent = validMessages[0]?.content;
+            const firstUserMessageContent = validMessages[0]?.parts[0]?.text;
             const title = firstUserMessageContent?.length > 30
                 ? `${firstUserMessageContent.substring(0, 30)}...`
                 : firstUserMessageContent || 'New Chat';
-                
+
             conversation = new Conversation({
                 userId: userId,
                 conversationId: conversationId,
                 title: title,
-                messages: [], // Initialize with empty array to prevent undefined errors
+                messages: [],
                 createdAt: new Date(),
                 updatedAt: new Date()
             });
-            
-            console.log("🚀 New conversation created:", { 
+
+            console.log("🚀 New conversation created:", {
                 conversationId,
                 userId,
                 title: conversation.title
@@ -277,47 +251,71 @@ router.post('/', authenticateToken, async (req, res) => {
         if (conversation.messages && conversation.messages.length > 0) {
             chatHistory = conversation.messages.map(msg => ({
                 role: msg.role,
-                content: msg.content,
-                ...(msg.tool_call_id ? { tool_call_id: msg.tool_call_id } : {})
+                parts: [{ text: msg.content }],
+                ...(msg.tool_calls ? { tool_calls: msg.tool_calls } : {})
             }));
         }
 
-        // Build messages to send to OpenAI
+        // Build messages to send to Gemini
         const finalMessages = [systemMessage, ...chatHistory];
-        
+
         // Add the new user message(s)
         for (const msg of validMessages) {
             finalMessages.push(msg);
-            
+
             // Also add to our conversation object
             conversation.messages.push({
                 role: msg.role,
-                content: msg.content,
+                content: msg.parts[0].text,
                 timestamp: new Date()
             });
         }
 
-        const completion = await client.chat.completions.create({
-            model: "gpt-4-turbo",
-            messages: finalMessages,
-            temperature: temperature,
-            tools: tools,
-            tool_choice: "auto",
+        const chat = geminiModel.startChat({
+            history: finalMessages,
+            generationConfig: {
+                temperature: temperature,
+            },
+            tools: [{ function_declarations: tools }],
         });
 
-        let assistantMessage = completion.choices[0].message;
-        let reply = assistantMessage.content;
+        const result = await chat.sendMessageStream(validMessages.slice(-1));
+        let assistantResponse = '';
+        let currentToolCalls = [];
+        let finalResponse = null;
+
+        for await (const chunk of result) {
+            const chunkData = chunk.candidates?.[0]?.content?.parts?.[0];
+            if (chunkData?.text) {
+                assistantResponse += chunkData.text;
+            }
+            const toolCalls = chunk.candidates?.[0]?.content?.tool_calls;
+            if (toolCalls && toolCalls.length > 0) {
+                currentToolCalls.push(...toolCalls);
+            }
+        }
+
+        let reply = assistantResponse;
         let toolResults = [];
-        
-        if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-            // Add the assistant's tool call message to our messages array
-            finalMessages.push(assistantMessage);
-            
+
+        if (currentToolCalls.length > 0) {
+            finalMessages.push({
+                role: "assistant",
+                parts: [{ text: assistantResponse }],
+                tool_calls: currentToolCalls.map(tc => ({
+                    id: tc.id,
+                    function: {
+                        name: tc.function.name,
+                        parameters: JSON.parse(tc.function.arguments)
+                    }
+                }))
+            });
+
             // Store tool calls in conversation
             conversation.messages.push({
                 role: "assistant",
-                content: assistantMessage.content || "",
-                tool_calls: assistantMessage.tool_calls.map(tc => ({
+                content: assistantResponse || "",
+                tool_calls: currentToolCalls.map(tc => ({
                     id: tc.id,
                     function: {
                         name: tc.function.name,
@@ -327,9 +325,9 @@ router.post('/', authenticateToken, async (req, res) => {
                 timestamp: new Date()
             });
 
-            for (const toolCall of assistantMessage.tool_calls) {
+            for (const toolCall of currentToolCalls) {
                 const functionName = toolCall.function.name;
-                const functionArgs = JSON.parse(toolCall.function.arguments);
+                const functionArgs = toolCall.function.parameters;
                 const agentName = AGENTS[functionName]?.name || functionName;
 
                 console.log(`Calling ${agentName} with args:`, functionArgs);
@@ -421,14 +419,14 @@ router.post('/', authenticateToken, async (req, res) => {
                 // Add the tool response to our messages array
                 const toolMessage = {
                     role: "tool",
+                    parts: [{ text: JSON.stringify(functionResult) }],
                     tool_call_id: toolCall.id,
                     name: functionName,
-                    content: JSON.stringify(functionResult),
                     timestamp: new Date()
                 };
-                
+
                 finalMessages.push(toolMessage);
-                
+
                 // Store in conversation
                 conversation.messages.push({
                     role: "tool",
@@ -438,29 +436,36 @@ router.post('/', authenticateToken, async (req, res) => {
                 });
             }
 
-            // Get final response from OpenAI
-            const response2 = await client.chat.completions.create({
-                model: "gpt-4-turbo",
-                messages: finalMessages,
-                temperature: temperature
-            });
+            // Get final response from Gemini
+            try {
+                const response2 = await geminiModel.generateContent({
+                    model: "gemini-pro",
+                    contents: finalMessages,
+                    generationConfig: {
+                        temperature: temperature,
+                    }
+                });
 
-            reply = response2.choices[0].message.content;
+                const finalResponseData = response2.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+                reply = finalResponseData || 'No final response from model after tool calls.';
+            } catch (error) {
+                console.error("Error generating final response:", error);
+                reply = "Error generating final response after processing tools.";
+            }
         }
-
-        // Add assistant's final response to conversation
+        /// Add assistant's final response to conversation
         conversation.messages.push({
             role: "assistant",
             content: reply,
             timestamp: new Date()
         });
-        
+
         // Update conversation timestamps
         conversation.updatedAt = new Date();
-        
+
         // Save conversation to database
         await conversation.save();
-        
+
         console.log("🚀 Conversation updated:", {
             conversationId: conversationId,
             userId: userId,

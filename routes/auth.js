@@ -63,7 +63,7 @@ router.get('/revalidate', (req, res) => {
 });
 
 router.post('/logout', (req, res) => {
-    res.clearCookie('token'); // Clear the 'token' cookie
+    res.clearCookie('token'); 
     res.status(200).json({ message: 'Logged out successfully' });
 });
 
