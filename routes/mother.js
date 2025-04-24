@@ -6,9 +6,8 @@ const moment = require('moment');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Conversation = require('../models/conversation');
 const { getIataCodeFromCity } = require('../util/iata');
-const Prompt = require('../services/prompt');
+const Prompt = require('../services/geminiprompt');
 const dotenv = require('dotenv');
-const { isRateLimited, trackRequest } = require('../middleware/ratelimit');
 const authenticateToken = require('../middleware/auth');
 
 dotenv.config();
@@ -16,152 +15,127 @@ dotenv.config();
 const AGENTS = {
     get_flight_information: {
         name: "Alice (Flight Agent)",
-        endpoint: "http://localhost:8001/v1/get-flight-prices"
+        endpoint: process.env.FLIGHT_AGENT_URL || "http://localhost:8001/v1/get-flight-prices"
     },
     get_accomodation: {
         name: "Bob (Accomodation Agent)",
-        endpoint: "http://localhost:8002/v1/get_accommodation"
+        endpoint: process.env.ACCOMMODATION_AGENT_URL || "http://localhost:8002/v1/get_accommodation"
     },
     get_sightSeeing: {
         name: "Charlie (Sightseeing Agent)",
-        endpoint: "http://localhost:8003/v1/get_sight_seeing"
+        endpoint: process.env.SIGHTSEEING_AGENT_URL || "http://localhost:8003/v1/get_sight_seeing"
     }
 };
 
-// Correctly formatted tools for Gemini API (using function calling schema)
-const tools = [
-    {
-        function_declarations: [
-            {
-                name: "get_flight_information",
-                description: "Get flight information from Alice (Flight Agent) based on user input",
-                parameters: {
-                    type: "object",
-                    properties: {
-                        departure_location: {
-                            type: "string",
-                            description: "The location or airport where the flight is departing from (e.g. BOM, DEL, LOS, DXB, NYK).airport"
-                        },
-                        destination: {
-                            type: "string",
-                            description: "The destination city or airport (e.g. BOM, DEL, LOS, DXB, NYK ).airport",
-                        },
-                        departure_date: {
-                            type: "string",
-                            description: "The date of departure inYYYY-MM-DD format"
-                        },
-                        flight_type: {
-                            type: "string",
-                            enum: ["ECONOMY", "BUSINESS-CLASS", "FIRST-CLASS", "PREMIUM-ECONOMY"],
-                            description: "The type of flight: (ECONOMY, BUSINESS-CLASS, FIRST-CLASS, PREMIUM-ECONOMY)"
-                        },
-                        number_of_passengers: {
-                            type: "integer",
-                            description: "The number of passengers for the flight"
-                        },
+const tools = {
+    functionDeclarations: [
+        {
+            "name": "get_flight_information",
+            "description": "Get flight information from Alice (Flight Agent) based on user input",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "departure_location": {
+                        "type": "string",
+                        "description": "The location or airport where the flight is departing from (e.g., BOM, DEL, LOS, DXB, NYK)"
                     },
-                    required: ["departure_location", "destination", "departure_date", "flight_type", "number_of_passengers"]
-                }
-            }
-        ]
-    },
-    {
-        function_declarations: [
-            {
-                name: "get_accomodation",
-                description: "Get accommodation options from Bob (Accommodation Agent) at user destination location, checkInDate and checkOutDate",
-                parameters: {
-                    type: "object",
-                    properties: {
-                        destination: {
-                            type: "string",
-                            description: "The destination city or location and the country for accommodation(e.g Lagos, Nigeria or London, UK)",
-                        },
-                        checkInDate: {
-                            type: "string",
-                            description: "The date of check-in inYYYY-MM-DD format"
-                        },
-                        checkOutDate: {
-                            type: "string",
-                            description: "The date of check-out inYYYY-MM-DD format"
-                        }
-
+                    "destination": {
+                        "type": "string",
+                        "description": "The destination city or airport (e.g., BOM, DEL, LOS, DXB, NYK)"
                     },
-                    required: ["destination", "checkInDate", "checkOutDate"]
-                }
-            }
-        ]
-    },
-    {
-        function_declarations: [
-            {
-                name: "get_sightSeeing",
-                description: "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
-                parameters: {
-                    type: "object",
-                    properties: {
-                        destination: {
-                            type: "string",
-                            description: "The destination city or location for sightseeing recommendations",
-                        },
+                    "departure_date": {
+                        "type": "string",
+                        "description": "The date of departure inYYYY-MM-DD format"
                     },
-                    required: ['destination']
-                }
+                    "flight_type": {
+                        "type": "string",
+                        "enum": ["ECONOMY", "BUSINESS-CLASS", "FIRST-CLASS", "PREMIUM-ECONOMY"],
+                        "description": "The type of flight: ECONOMY, BUSINESS-CLASS, FIRST-CLASS, PREMIUM-ECONOMY"
+                    },
+                    "number_of_passengers": {
+                        "type": "integer",
+                        "description": "The number of passengers for the flight"
+                    }
+                },
+                "required": ["departure_location", "destination", "departure_date", "flight_type", "number_of_passengers"]
             }
-        ]
-    }
-];
+        },
+        {
+            "name": "get_accomodation",
+            "description": "Get accommodation options from Bob (Accommodation Agent) at user destination location, checkInDate, and checkOutDate",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {
+                        "type": "string",
+                        "description": "The destination city or location and the country for accommodation (e.g., Lagos, Nigeria or London, UK)"
+                    },
+                    "checkInDate": {
+                        "type": "string",
+                        "description": "The date of check-in inYYYY-MM-DD format"
+                    },
+                    "checkOutDate": {
+                        "type": "string",
+                        "description": "The date of check-out inYYYY-MM-DD format"
+                    }
+                },
+                "required": ["destination", "checkInDate", "checkOutDate"]
+            }
+        },
+        {
+            "name": "get_sightSeeing",
+            "description": "Get sightseeing recommendations from Charlie (Sightseeing Agent) based on user destination location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {
+                        "type": "string",
+                        "description": "The destination city or location for sightseeing recommendations"
+                    }
+                },
+                "required": ["destination"]
+            }
+        }
+    ]
+};
 
 function parseAndValidateDate(dateString) {
     const currentDate = moment();
-    let parsedDate = moment(dateString, 'YYYY-MM-DD', true);
+    const parsedDate = moment(dateString, 'YYYY-MM-DD', true);
 
     if (!parsedDate.isValid()) {
-        parsedDate = moment(dateString);
-        if (!parsedDate.isValid()) {
-            return { error: `Could not parse date: ${dateString}. Please useYYYY-MM-DD format.` };
-        }
+        return { error: `Invalid date: ${dateString}. Please useYYYY-MM-DD format.` };
     }
 
     if (parsedDate.isBefore(currentDate, 'day')) {
-        console.warn(`Departure date "<span class="math-inline">\{dateString\}" is in the past\. Assuming current year \(</span>{currentDate.year()}).`);
-        console.log(`Original date: ${dateString}, Parsed date: ${parsedDate.format('YYYY-MM-DD')}`);
-        parsedDate.year(currentDate.year());
-    }
-
-    if (!parsedDate.isValid()) {
-        return { error: `Invalid date after processing: ${dateString}.` };
+        console.warn(`Date "${dateString}" is in the past. Please provide a future date.`);
+        return { error: `Date ${dateString} is in the past. Please provide a future date.` };
     }
 
     return { date: parsedDate.format('YYYY-MM-DD') };
 }
 
-// Calls the Agents API AND Parameters
 async function callAgentApi(toolName, parameters) {
     try {
         const agent = AGENTS[toolName];
-
         if (!agent) {
             throw new Error(`No agent defined for tool: ${toolName}`);
         }
         console.log(`Calling ${agent.name} for information...`);
 
         let response;
-
         if (toolName === "get_accomodation" || toolName === "get_sightSeeing") {
-            response = await axios.get(agent.endpoint, {
-                params: parameters
-            });
+            response = await axios.get(agent.endpoint, { params: parameters, timeout: 10000 });
         } else {
-            response = await axios.post(agent.endpoint, parameters);
+            response = await axios.post(agent.endpoint, parameters, { timeout: 10000 });
         }
 
         if (response.status !== 200) {
-            console.error(`Error from ${agent.name} API: Status ${response.status}`, response.data);
+            console.error(`Error from ${agent.name} API: Status ${response.status}`, response.data || 'No data returned');
             return {
                 agent: agent.name,
                 error: `Failed to get data from ${agent.name}. API returned status: ${response.status}`,
-                details: response.data
+                details: response.data || 'No details available'
             };
         }
 
@@ -180,35 +154,30 @@ async function callAgentApi(toolName, parameters) {
     }
 }
 
-// Main travel agent endpoint
 router.post('/', authenticateToken, async (req, res) => {
-
     if (!req.user || !req.user.userId) {
         return res.status(401).json({ message: 'Unauthorized: No user data' });
     }
-
-    let aliceInitiated = false;
-    let bobRespondedToAlice = false;
 
     const userId = req.user.userId;
     const conversationId = req.body.conversationId || uuidv4();
     const geminiApiKey = req.headers['x-user-gemini-key'] || process.env.GEMINI_API_KEY;
 
+    let toolExecutionState = {
+        flightInfoProvided: false,
+        accommodationBooked: false
+    };
+
     try {
-        // Check if API key is valid
         if (!geminiApiKey) {
             throw new Error("Missing Gemini API key. Please provide a valid API key.");
         }
 
-        // Initialize the Gemini client
         const genAI = new GoogleGenerativeAI(geminiApiKey);
-
-        // Get the model using getGenerativeModel method
-        const geminiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-        // Add debug logging to confirm model is correctly initialized
-        console.log("genAI initialized:", !!genAI);
-        console.log("geminiModel initialized:", !!geminiModel);
+        const geminiModel = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash",
+            systemInstruction: "You are a helpful assistant."
+        });
 
         const { messages } = req.body;
 
@@ -216,322 +185,494 @@ router.post('/', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: "Messages must be a non-empty array" });
         }
 
-        // Make a copy of messages to avoid modifying the original
-        const validMessages = messages.filter(msg => msg.content && msg.content.trim())
-            .map(msg => ({ role: "user", parts: [{ text: msg.content }] }));
+        const validMessages = messages
+            .filter(msg => msg.content && msg.content.trim())
+            .map(msg => ({ role: msg.role, parts: [{ text: msg.content }] }));
 
         if (validMessages.length === 0) {
             return res.status(400).json({ error: "No valid messages found" });
         }
 
-        // Check if this is a new conversation or continuing an existing one
         let conversation = await Conversation.findOne({
             conversationId: conversationId,
             userId: userId
         });
 
         const isNewConversation = !conversation;
+        let finalMessages = [];
+
         if (isNewConversation) {
-            // Create a new conversation with user's first message as title
-            const firstUserMessageContent = validMessages[0]?.parts[0]?.text;
-            const title = firstUserMessageContent?.length > 30
-                ? `${firstUserMessageContent.substring(0, 30)}...`
-                : firstUserMessageContent || 'New Chat';
+            conversation = await createNewConversation(userId, conversationId, validMessages, Prompt);
+            finalMessages.push({ role: "user", parts: [{ text: validMessages[0].parts[0].text }] });
+        } else {
+            finalMessages = loadConversationHistory(conversation);
+            toolExecutionState = determineToolExecutionState(conversation.messages);
 
-            conversation = new Conversation({
-                userId: userId,
-                conversationId: conversationId,
-                title: title,
-                messages: [],
-                createdAt: new Date(),
-                updatedAt: new Date()
-            });
+            for (const msg of validMessages) {
+                const geminiRole = msg.role === "assistant" ? "model" : msg.role;
+                finalMessages.push({ role: geminiRole, parts: msg.parts });
 
-            console.log("🚀 New conversation created:", {
-                conversationId,
-                userId,
-                title: conversation.title
-            });
-
-            // For new conversations, prepend the system prompt to the first user message
-            // This is the key fix to make it work with Gemini's API which doesn't support system messages
-            if (validMessages.length > 0) {
-                validMessages[0].parts[0].text = `<span class="math-inline">\{Prompt\}\\n\\n</span>{validMessages[0].parts[0].text}`;
+                conversation.messages.push({
+                    role: msg.role === "user" ? "user" : "assistant",
+                    content: msg.parts[0].text || "Empty message",
+                    timestamp: new Date()
+                });
             }
         }
 
-        // Ensure messages array exists
-        if (!conversation.messages) {
-            conversation.messages = [];
-        }
+        console.log("Final Messages for startChat:", JSON.stringify(finalMessages, null, 2));
+        finalMessages.forEach((msg, index) => {
+            if (!msg.role || (!msg.parts && msg.role !== "function") || (msg.role === "function" && !msg.name)) {
+                console.error(`Invalid message at index ${index}:`, msg);
+                throw new Error(`Invalid message format in history at index ${index}`);
+            }
+        });
 
-        // Get conversation history if it exists
-        let chatHistory = [];
-        if (conversation.messages && conversation.messages.length > 0) {
-            chatHistory = conversation.messages.map(msg => ({
-                role: msg.role === "system" ? "user" : (msg.role === "assistant" ? "model" : msg.role),
-                parts: [{ text: msg.content }],
-                ...(msg.tool_calls ? { tool_calls: msg.tool_calls } : {})
-            }));
-        }
-
-        // Build messages to send to Gemini - without a system message
-        const finalMessages = [...chatHistory];
-
-        // Add the new user message(s)
-        for (const msg of validMessages) {
-            finalMessages.push(msg);
-
-            // Also add to our conversation object
-            conversation.messages.push({
-                role: msg.role,
-                content: msg.parts[0].text,
-                timestamp: new Date()
-            });
-        }
-
-        // Create a chat session using the correct API method
-        // Note: We're not including a system message in history anymore
         const chat = geminiModel.startChat({
             history: finalMessages,
-            tools: tools
+            tools: tools,
+            systemInstruction: { parts: [{ text: Prompt }] }
         });
 
-        const result = await chat.sendMessageStream(validMessages.slice(-1)[0].parts[0].text);
-        let assistantResponse = '';
-        let currentToolCalls = [];
+        try {
+            const result = await chat.sendMessage(validMessages.slice(-1)[0].parts[0].text);
+            const { assistantResponse, toolCalls } = extractResponseAndToolCalls(result);
+            console.log("Assistant Response:", assistantResponse);
+            console.log("Gemini Raw Response:", JSON.stringify(result.response, null, 2));
 
-        for await (const chunk of result.stream) {
-            console.log("--- Stream Chunk ---");
-            console.log(chunk);
-            
-            // Check if chunk has candidates
-            if (chunk.candidates && chunk.candidates.length > 0) {
-                const candidate = chunk.candidates[0];
-                if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
-                    for (const part of candidate.content.parts) {
-                        if (part.text && typeof part.text === 'string') {
-                            assistantResponse += part.text;
-                        } else if (part.functionCall) {
-                            // Handle tool calls
-                            currentToolCalls.push({
-                                id: part.functionCall.id || uuidv4(),
-                                function: {
-                                    name: part.functionCall.name,
-                                    arguments: JSON.stringify(part.functionCall.args)
-                                }
-                            });
-                        }
-                    }
+            let reply = assistantResponse || "I received your message.";
+            let toolResults = [];
+
+            if (toolCalls.length > 0) {
+                storeAssistantResponseWithToolCalls(conversation, assistantResponse, toolCalls);
+                toolResults = await processToolCalls(toolCalls, toolExecutionState);
+
+                for (const toolResult of toolResults) {
+                    conversation.messages.push({
+                        role: "tool",
+                        content: typeof toolResult.result === "string" ? toolResult.result : JSON.stringify(toolResult.result || {}),
+                        tool_call_id: toolResult.toolCall.id,
+                        name: toolResult.toolCall.function.name,
+                        timestamp: new Date()
+                    });
                 }
+
+                reply = await generateFinalResponse(geminiModel, toolResults);
             }
-        }
-        console.log("Assistant Response (after stream):", assistantResponse);
-        console.log("Assistant Response (after stream):", assistantResponse);
-        let reply = assistantResponse;
-        let toolResults = [];
 
-        if (currentToolCalls.length > 0) {
-            finalMessages.push({
-                role: "model",
-                parts: [{ text: assistantResponse }],
-                tool_calls: currentToolCalls.map(tc => ({
-                    id: tc.id,
-                    function: {
-                        name: tc.function.name,
-                        parameters: JSON.parse(tc.function.arguments)
-                    }
-                }))
-            });
-
-            // Store tool calls in conversation
             conversation.messages.push({
                 role: "assistant",
-                content: assistantResponse || "",
-                tool_calls: currentToolCalls.map(tc => ({
-                    id: tc.id,
-                    function: {
-                        name: tc.function.name,
-                        arguments: tc.function.arguments
-                    }
-                })),
+                content: reply || "I processed your request.",
                 timestamp: new Date()
             });
 
-            for (const toolCall of currentToolCalls) {
-                const functionName = toolCall.function.name;
-                const functionArgs = typeof toolCall.function.arguments === 'string'
-                    ? JSON.parse(toolCall.function.arguments)
-                    : toolCall.function.arguments;
+            const MIN_MESSAGES_FOR_TITLE = 3;
+            const MAX_MESSAGES_TO_CONSIDER_FOR_TITLE = 10;
 
-                const agentName = AGENTS[functionName]?.name || functionName;
+            const initialTitleFromSlice = conversation.messages[0]?.content?.slice(0, 30);  // Fixed "From" spelling
+            const hasDefaultTitle = conversation.title === "New Chat";
+            const needsTitleGeneration = !conversation.title || hasDefaultTitle;
 
-                console.log(`Calling ${agentName} with args:`, functionArgs);
+            if(
+                conversation.messages.length > MIN_MESSAGES_FOR_TITLE &&
+                conversation.messages.length < MAX_MESSAGES_TO_CONSIDER_FOR_TITLE &&
+                needsTitleGeneration
+            )
+            {
+                try {console.log("Attempting to suggest title...");
+                    // Get the first few messages to summarize
+                    const messagesForTitlePrompt = conversation.messages.slice(0, MAX_MESSAGES_TO_CONSIDER_FOR_TITLE );
 
-                let apiParams = { ...functionArgs };
-                let functionResult;
-                let shouldExecuteTool = true;
+                    let promptMessages = messagesForTitlePrompt
+                        .filter(msg => msg.role === 'user' || msg.role === 'assistant') // Only include user/assistant turns
+                        .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: "${msg.content?.substring(0, 150)}..."`) // Limit content length for prompt
+                        .join('\n');
 
-                if (functionName === 'get_flight_information') {
-                    if (functionArgs.departure_location && functionArgs.departure_location.length !== 3) {
-                        const iata = getIataCodeFromCity(functionArgs.departure_location);
-                        if (iata) {
-                            apiParams.originLocationCode = iata;
-                            console.log(`Converted departure location "${functionArgs.departure_location}" to IATA: ${iata}`);
-                        } else {
-                            console.warn(`Could not find IATA code for departure location: ${functionArgs.departure_location}`);
-                            shouldExecuteTool = false;
-                            functionResult = { error: `Could not find airport code for: ${functionArgs.departure_location}` };
-                        }
-                        delete apiParams.departure_location;
-                    } else if (functionArgs.departure_location) {
-                        apiParams.originLocationCode = functionArgs.departure_location;
-                        delete apiParams.departure_location;
-                    }
+                    const titlePrompt = `Analyze the following conversation exchange to determine the main topic and suggest a very concise title (under 10 words). Respond with only the suggested title:\n\n${promptMessages}\n\nSuggested Title:`;
 
-                    if (functionArgs.destination && functionArgs.destination.length !== 3) {
-                        const iata = getIataCodeFromCity(functionArgs.destination);
-                        if (iata) {
-                            apiParams.destinationLocationCode = iata;
-                            console.log(`Converted destination "${functionArgs.destination}" to IATA: ${iata}`);
-                        } else {
-                            console.warn(`Could not find IATA code for destination: ${functionArgs.destination}`);
-                            shouldExecuteTool = false;
-                            functionResult = { error: `Could not find airport code for: ${functionArgs.destination}` };
-                        }
-                        delete apiParams.destination;
-                    } else if (functionArgs.destination) {
-                        apiParams.destinationLocationCode = functionArgs.destination;
-                        delete apiParams.destination;
-                    }
+                    // Make a separate API call using generateContent for the title
+                    const titleResult = await geminiModel.generateContent({
+                        contents: [{ role: "user", parts: [{ text: titlePrompt }] }]
+                        // No tools or history needed for this specific call
+                    });
 
-                    const dateResult = parseAndValidateDate(functionArgs.departure_date);
-                    if (dateResult.error) {
-                        console.warn(`Invalid departure date: ${dateResult.error}`);
-                        shouldExecuteTool = false;
-                        functionResult = { error: dateResult.error };
+                    const suggestedTitle = titleResult?.response?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+                    if (suggestedTitle && suggestedTitle !== conversation.title) {
+                        // Update the conversation title in the database record
+                        conversation.title = suggestedTitle;
+                        console.log(`🚀 Conversation ${conversation.conversationId} title updated to: "${suggestedTitle}"`);
                     } else {
-                        apiParams.departureDate = dateResult.date;
-                        delete apiParams.departure_date;
+                         console.log("Title suggestion returned no valid title or the same title.");
                     }
 
-                    apiParams.adults = functionArgs.number_of_passengers;
-                    delete apiParams.number_of_passengers;
-                    apiParams.travelClass = functionArgs.flight_type.toUpperCase() === 'BUSINESS-CLASS' ? 'BUSINESS' : 'ECONOMY';
-                    delete apiParams.flight_type;
+               } catch (titleError) {
+                   console.error('Error suggesting or updating title:', titleError.message);
+                   // Log the error but don't stop the main response
+               }
+           }
 
-                    if (shouldExecuteTool) {
-                        functionResult = await callAgentApi(functionName, apiParams);
-                        aliceInitiated = !functionResult?.error;
-                    } else if (!functionResult) {
-                        functionResult = { error: "Could not process flight information request." };
-                    }
-                } else if (functionName === 'get_accomodation') {
-                    if (aliceInitiated) {
-                        functionResult = await callAgentApi(functionName, apiParams);
-                        bobRespondedToAlice = !functionResult?.error;
-                    } else {
-                        shouldExecuteTool = false;
-                        functionResult = { status: "pending", reason: "flight_details_needed" };
-                    }
-                } else if (functionName === 'get_sightSeeing') {
-                    if (aliceInitiated && bobRespondedToAlice) {
-                        functionResult = await callAgentApi(functionName, apiParams);
-                    } else {
-                        shouldExecuteTool = false;
-                        functionResult = { status: "pending", reason: "flight_and_accommodation_needed" };
-                    }
-                } else {
-                    functionResult = { error: `Unknown tool: ${functionName}` };
-                    shouldExecuteTool = false;
-                }
+            conversation.updatedAt = new Date();
+            await conversation.save();
 
-                toolResults.push({
-                    agent: agentName,
-                    toolCall: toolCall,
-                    result: functionResult
-                });
+            console.log("🚀 Conversation updated:", {
+                conversationId,
+                userId,
+                toolExecutionState,
+                finalTitle: conversation.title
+            });
 
-                // Add the tool response to our messages array
-                const toolMessage = {
-                    role: "tool",
-                    parts: [{ text: JSON.stringify(functionResult) }],
-                    tool_call_id: toolCall.id,
-                    name: functionName,
-                    timestamp: new Date()
-                };
-
-                finalMessages.push(toolMessage);
-
-                // Store in conversation
-                conversation.messages.push({
-                    role: "tool",
-                    content: JSON.stringify(functionResult),
-                    tool_call_id: toolCall.id,
-                    timestamp: new Date()
-                });
-            }
-
-            // Get final response from Gemini
-            try {
-                const response2 = await geminiModel.generateContent({
-                    contents: finalMessages,
-                });
-                console.log("--- Final generateContent Response ---");
-                console.log(response2);
-                
-                let finalResponseData = '';
-                if (
-                    response2.response &&
-                    response2.response.candidates &&
-                    response2.response.candidates[0] &&
-                    response2.response.candidates[0].content &&
-                    response2.response.candidates[0].content.parts &&
-                    response2.response.candidates[0].content.parts[0] &&
-                    response2.response.candidates[0].content.parts[0].text
-                ) {
-                    finalResponseData = response2.response.candidates[0].content.parts[0].text;
-                }
-                
-                console.log("Final Response Data:", finalResponseData);
-                reply = finalResponseData || 'No final response from model after tool calls.';
-            } catch (error) {
-                console.error("Error generating final response:", error);
-                reply = "Error generating final response after processing tools.";
-            }
+            res.setHeader('X-User-ID', userId);
+            res.status(200).json({
+                reply,
+                userId,
+                conversationId,
+                toolResults: toolResults.length > 0 ? toolResults : undefined
+            });
+        } catch (error) {
+            handleChatError(error, conversation, res);
         }
-        // Add assistant's final response to conversation
-        conversation.messages.push({
-            role: "assistant",
-            content: reply,
-            timestamp: new Date()
-        });
-
-        // Update conversation timestamps
-        conversation.updatedAt = new Date();
-
-        // Save conversation to database
-        await conversation.save();
-
-        console.log("🚀 Conversation updated:", {
-            conversationId: conversationId,
-            userId: userId,
-            aliceInitiated,
-            bobRespondedToAlice
-        });
-
-        res.setHeader('X-User-ID', userId);
-        res.status(200).json({
-            reply: reply,
-            userId: userId,
-            conversationId: conversationId,
-            toolResults: toolResults.length > 0 ? toolResults : undefined
-        });
-
     } catch (error) {
         console.error("Error processing request:", error);
         res.status(500).json({ error: "An error occurred while processing your request", details: error.message });
     }
 });
+
+async function createNewConversation(userId, conversationId, validMessages) {
+    const firstUserMessageContent = validMessages[0]?.parts[0]?.text;
+    const title = firstUserMessageContent?.length > 30
+        ? `${firstUserMessageContent.substring(0, 30)}...`
+        : firstUserMessageContent || 'New Chat';
+
+    const conversation = new Conversation({
+        userId,
+        conversationId,
+        title,
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+    });
+
+    if (validMessages.length > 0) {
+        conversation.messages.push({
+            role: validMessages[0].role,
+            content: validMessages[0].parts[0].text,
+            timestamp: new Date()
+        });
+    }
+
+    console.log("🚀 New conversation created:", {
+        conversationId,
+        userId,
+        title: conversation.title
+    });
+
+    await conversation.save();
+    return conversation;
+}
+
+function loadConversationHistory(conversation) {
+    if (!conversation.messages || conversation.messages.length === 0) {
+        return [];
+    }
+
+    return conversation.messages
+        .filter(msg => msg.role !== "system")
+        .map(msg => {
+            let historyMessage = { role: "" };
+            switch (msg.role) {
+                case "user":
+                    historyMessage.role = "user";
+                    historyMessage.parts = [{ text: msg.content || "" }];
+                    break;
+                case "assistant":
+                    historyMessage.role = "model";
+                    historyMessage.parts = [{ text: msg.content || "" }];
+                    break;
+                case "tool":
+                    historyMessage.role = "function";
+                    historyMessage.name = msg.name;
+                    // Use parts for function responses to match SDK expectations
+                    historyMessage.parts = [{ text: msg.content || "" }];
+                    break;
+                default:
+                    historyMessage.role = "user";
+                    historyMessage.parts = [{ text: msg.content || "" }];
+            }
+
+            // Ensure parts exists for user and model roles
+            if (historyMessage.role === "user" || historyMessage.role === "model") {
+                if (!historyMessage.parts || !Array.isArray(historyMessage.parts)) {
+                    historyMessage.parts = [{ text: "" }];
+                }
+            }
+
+            // Validate function role
+            if (historyMessage.role === "function") {
+                if (!historyMessage.name || !historyMessage.parts) {
+                    console.warn(`Skipping invalid function message: ${JSON.stringify(msg)}`);
+                    return null; // Skip invalid entries
+                }
+            }
+
+            return historyMessage;
+        })
+        .filter(msg => msg !== null); // Remove null entries
+}
+
+function determineToolExecutionState(messages) {
+    let state = {
+        flightInfoProvided: false,
+        accommodationBooked: false
+    };
+
+    if (!messages) return state;
+
+    for (const msg of messages) {
+        if (msg.role === "tool" && msg.name === "get_flight_information") {
+            try {
+                const result = JSON.parse(msg.content);
+                if (!result.error) {
+                    state.flightInfoProvided = true;
+                }
+            } catch (e) {
+                // Ignore parse errors
+            }
+        }
+
+        if (msg.role === "tool" && msg.name === "get_accomodation") {
+            try {
+                const result = JSON.parse(msg.content);
+                if (!result.error) {
+                    state.accommodationBooked = true;
+                }
+            } catch (e) {
+            }
+        }
+    }
+
+    return state;
+}
+
+function extractResponseAndToolCalls(result) {
+    let assistantResponse = '';
+    let toolCalls = [];
+
+    if (!result.response?.candidates?.length) {
+        console.error("No candidates found in Gemini response:", result.response);
+        return { assistantResponse: "No response from assistant", toolCalls: [] };
+    }
+
+    const candidate = result.response.candidates[0];
+
+    if (candidate.content?.parts) {
+        for (const part of candidate.content.parts) {
+            if (part.text) {
+                assistantResponse += part.text;
+            } else if (part.functionCall) {
+                toolCalls.push({
+                    id: part.functionCall.name + "_" + uuidv4().substring(0, 8),
+                    function: {
+                        name: part.functionCall.name,
+                        arguments: JSON.stringify(part.functionCall.args || {})
+                    }
+                });
+            }
+        }
+    }
+
+    return { assistantResponse, toolCalls };
+}
+
+function storeAssistantResponseWithToolCalls(conversation, assistantResponse, toolCalls) {
+    conversation.messages.push({
+        role: "assistant",
+        content: assistantResponse || "Processing your request...",
+        tool_calls: toolCalls.map(tc => ({
+            id: tc.id,
+            function: {
+                name: tc.function.name,
+                arguments: tc.function.arguments
+            }
+        })),
+        timestamp: new Date()
+    });
+}
+
+async function processToolCalls(toolCalls, toolExecutionState) {
+    const toolResults = [];
+
+    for (const toolCall of toolCalls) {
+        const functionName = toolCall.function.name;
+        const agentName = AGENTS[functionName]?.name || functionName;
+        console.log(`Calling ${agentName} with args:`, toolCall.function.arguments);
+
+        let functionArgs;
+        try {
+            functionArgs = typeof toolCall.function.arguments === 'string' ? JSON.parse(toolCall.function.arguments)
+            : toolCall.function.arguments;
+    } catch (error) {
+        console.error(`Error parsing tool call arguments for ${functionName}:`, error.message);
+        toolResults.push({
+            agent: agentName,
+            toolCall: toolCall,
+            result: { error: `Invalid tool call arguments: ${error.message}` }
+        });
+        continue;
+    }
+
+    let apiParams = { ...functionArgs };
+    let functionResult;
+    let shouldExecuteTool = true;
+
+    if (functionName === 'get_flight_information') {
+        const processedParams = processFlightParams(functionArgs);
+        if (processedParams.error) {
+            shouldExecuteTool = false;
+            functionResult = { error: processedParams.error };
+        } else {
+            apiParams = processedParams.params;
+            if (shouldExecuteTool) {
+                functionResult = await callAgentApi(functionName, apiParams);
+                toolExecutionState.flightInfoProvided = !functionResult?.error;
+            }
+        }
+    } else if (functionName === 'get_accomodation') {
+        if (toolExecutionState.flightInfoProvided) {
+            functionResult = await callAgentApi(functionName, apiParams);
+            toolExecutionState.accommodationBooked = !functionResult?.error;
+        } else {
+            shouldExecuteTool = false;
+            functionResult = {
+                status: "pending",
+                reason: "flight_details_needed",
+                message: "Please provide flight information first before looking for accommodation."
+            };
+        }
+    } else if (functionName === 'get_sightSeeing') {
+        if (toolExecutionState.flightInfoProvided && toolExecutionState.accommodationBooked) {
+            functionResult = await callAgentApi(functionName, apiParams);
+        } else {
+            shouldExecuteTool = false;
+            functionResult = {
+                status: "pending",
+                reason: "flight_and_accommodation_needed",
+                message: "Please complete flight and accommodation booking before planning sightseeing."
+            };
+        }
+    } else {
+        functionResult = { error: `Unknown tool: ${functionName}` };
+        shouldExecuteTool = false;
+    }
+
+    toolResults.push({
+        agent: agentName,
+        toolCall: toolCall,
+        result: functionResult || { error: "No result returned from tool" }
+    });
+}
+
+return toolResults;
+}
+
+function processFlightParams(functionArgs) {
+const apiParams = {};
+const errors = [];
+
+if (functionArgs.departure_location) {
+    if (functionArgs.departure_location.length !== 3) {
+        const iata = getIataCodeFromCity(functionArgs.departure_location);
+        if (iata) {
+            apiParams.originLocationCode = iata;
+            console.log(`Converted departure location "${functionArgs.departure_location}" to IATA: ${iata}`);
+        } else {
+            errors.push(`Could not find airport code for departure location: ${functionArgs.departure_location}`);
+        }
+    } else {
+        apiParams.originLocationCode = functionArgs.departure_location;
+    }
+} else {
+    errors.push("Departure location is required");
+}
+
+if (functionArgs.destination) {
+    if (functionArgs.destination.length !== 3) {
+        const iata = getIataCodeFromCity(functionArgs.destination);
+        if (iata) {
+            apiParams.destinationLocationCode = iata;
+            console.log(`Converted destination "${functionArgs.destination}" to IATA: ${iata}`);
+        } else {
+            errors.push(`Could not find airport code for destination: ${functionArgs.destination}`);
+        }
+    } else {
+        apiParams.destinationLocationCode = functionArgs.destination;
+    }
+} else {
+    errors.push("Destination is required");
+}
+
+if (functionArgs.departure_date) {
+    const dateResult = parseAndValidateDate(functionArgs.departure_date);
+    if (dateResult.error) {
+        errors.push(dateResult.error);
+    } else {
+        apiParams.departureDate = dateResult.date;
+    }
+} else {
+    errors.push("Departure date is required");
+}
+
+apiParams.adults = functionArgs.number_of_passengers || 1;
+apiParams.travelClass = functionArgs.flight_type?.toUpperCase() === 'BUSINESS-CLASS' ? 'BUSINESS' : 'ECONOMY';
+
+if (errors.length > 0) {
+    return { error: errors.join(". ") };
+}
+
+return { params: apiParams };
+}
+
+async function generateFinalResponse(geminiModel, toolResults) {
+try {
+    let toolResultText = toolResults.map(tr =>
+        `${tr.agent}: ${tr.result.error || JSON.stringify(tr.result)}`
+    ).join("\n\n");
+
+    const finalPrompt = `The user had a travel-related query, and I used tools to get the following information:\n\n${toolResultText}\n\nPlease provide a concise and helpful summary of this information for the user, adhering to the formatting guidelines for flights, accommodations, and sightseeing where applicable.`;
+
+    const response = await geminiModel.generateContent({
+        contents: [{ role: "user", parts: [{ text: finalPrompt }] }]
+    });
+
+    if (response.response?.candidates?.[0]?.content?.parts?.[0]?.text) {
+        return response.response.candidates[0].content.parts[0].text;
+    }
+
+    return "I have processed your travel information.";
+} catch (error) {
+    console.error("Error generating final response:", error);
+    return "I've gathered the information you requested, but had trouble summarizing it. Here are the key details from your travel query.";
+}
+}
+
+function handleChatError(error, conversation, res) {
+console.error("Error in chat processing:", error);
+
+conversation.messages.push({
+    role: "assistant",
+    content: "I'm sorry, I encountered an error while processing your request. Please try again later.",
+    timestamp: new Date()
+});
+
+conversation.updatedAt = new Date();
+conversation.save().catch(saveErr => {
+    console.error("Error saving conversation after error:", saveErr);
+});
+
+res.status(500).json({
+    error: "Error processing your chat request",
+    message: error.message || "Unknown error"
+});
+}
 
 module.exports = router;
