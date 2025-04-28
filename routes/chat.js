@@ -11,13 +11,15 @@ router.post('/create', authenticateToken, async (req, res) => {
 
   const { message } = req.body;
   const conversationId = uuidv4();
-  const title = message.slice(0, 30);
+  // const title = message.slice(0, 30);
+  const initialTitle = "New Chat";
+
 
   try {
     const newChat = await Conversation.create({
       userId: req.user.userId,
       conversationId,
-      title,
+      title: initialTitle,
       messages: [{ role: 'user', content: message, timestamp: new Date() }],
     });
 

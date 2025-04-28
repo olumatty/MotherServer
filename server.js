@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
@@ -17,15 +16,12 @@ const PORT = 8000;
 
 app.use(express.json());
 app.use(cookieParser());
-// CORS configuration that allows credentials
 app.use(
   cors({
     origin: 'http://localhost:5173',
-    credentials: true, // This is crucial for cookies/sessions!
+    credentials: true, 
   })
 );
-
-
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))

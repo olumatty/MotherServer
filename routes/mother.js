@@ -9,17 +9,18 @@ const { getIataCodeFromCity } = require('../util/iata');
 const Prompt = require('../services/geminiprompt');
 const dotenv = require('dotenv');
 const authenticateToken = require('../middleware/auth');
+const { getFullAirlineName } = require('../util/airlineUtils');
 
 dotenv.config();
 
 const AGENTS = {
     get_flight_information: {
         name: "Alice (Flight Agent)",
-        endpoint: process.env.FLIGHT_AGENT_URL || "http://localhost:8001/v1/get-flight-prices"
+        endpoint: process.env.FLIGHT_AGENT_URL || "https://travelai-com-v1-flight.onrender.com/v1/get-flight-prices"
     },
     get_accomodation: {
         name: "Bob (Accomodation Agent)",
-        endpoint: process.env.ACCOMMODATION_AGENT_URL || "http://localhost:8002/v1/get_accommodation"
+        endpoint: process.env.ACCOMMODATION_AGENT_URL || "https://travelai-accomodation.onrender.com/v1/get_accommodation"
     },
     get_sightSeeing: {
         name: "Charlie (Sightseeing Agent)",
@@ -104,7 +105,7 @@ function parseAndValidateDate(dateString) {
     const parsedDate = moment(dateString, 'YYYY-MM-DD', true);
 
     if (!parsedDate.isValid()) {
-        return { error: `Invalid date: ${dateString}. Please useYYYY-MM-DD format.` };
+        return { error: `Invalid date: ${dateString}. Please use YYYY-MM-DD format.` };
     }
 
     if (parsedDate.isBefore(currentDate, 'day')) {
@@ -125,9 +126,9 @@ async function callAgentApi(toolName, parameters) {
 
         let response;
         if (toolName === "get_accomodation" || toolName === "get_sightSeeing") {
-            response = await axios.get(agent.endpoint, { params: parameters, timeout: 10000 });
+            response = await axios.get(agent.endpoint, { params: parameters, timeout: 30000 });
         } else {
-            response = await axios.post(agent.endpoint, parameters, { timeout: 10000 });
+            response = await axios.post(agent.endpoint, parameters, { timeout: 30000 });
         }
 
         if (response.status !== 200) {
@@ -436,7 +437,6 @@ function determineToolExecutionState(messages) {
                     state.flightInfoProvided = true;
                 }
             } catch (e) {
-                // Ignore parse errors
             }
         }
 
@@ -538,15 +538,16 @@ async function processToolCalls(toolCalls, toolExecutionState) {
             }
         }
     } else if (functionName === 'get_accomodation') {
-        if (toolExecutionState.flightInfoProvided) {
+        const hasAccommodationDates = apiParams.checkInDate && apiParams.checkOutDate;
+        if (toolExecutionState.flightInfoProvided || hasAccommodationDates) {
             functionResult = await callAgentApi(functionName, apiParams);
             toolExecutionState.accommodationBooked = !functionResult?.error;
         } else {
             shouldExecuteTool = false;
             functionResult = {
                 status: "pending",
-                reason: "flight_details_needed",
-                message: "Please provide flight information first before looking for accommodation."
+                reason: "dates_needed", 
+                message: "To find accommodation, I need the check-in and check-out dates for your stay."
             };
         }
     } else if (functionName === 'get_sightSeeing') {
@@ -633,26 +634,55 @@ return { params: apiParams };
 }
 
 async function generateFinalResponse(geminiModel, toolResults) {
-try {
-    let toolResultText = toolResults.map(tr =>
-        `${tr.agent}: ${tr.result.error || JSON.stringify(tr.result)}`
-    ).join("\n\n");
+    try {
+        console.log("DEBUG: toolResults received in generateFinalResponse:", JSON.stringify(toolResults, null, 2));
 
-    const finalPrompt = `The user had a travel-related query, and I used tools to get the following information:\n\n${toolResultText}\n\nPlease provide a concise and helpful summary of this information for the user, adhering to the formatting guidelines for flights, accommodations, and sightseeing where applicable.`;
+        let toolResultText = toolResults.map(tr => {
+            console.log(`DEBUG: Processing result for agent ${tr.agent}:`, tr.result);
 
-    const response = await geminiModel.generateContent({
-        contents: [{ role: "user", parts: [{ text: finalPrompt }] }]
-    });
+            let processedResult = tr.result;
+            if (tr.agent === "Alice (Flight Agent)" && processedResult && processedResult.top_flights) {
+                try {
+                    // Create a deep copy to avoid modifying the original toolResults array
+                    processedResult = JSON.parse(JSON.stringify(tr.result));
 
-    if (response.response?.candidates?.[0]?.content?.parts?.[0]?.text) {
-        return response.response.candidates[0].content.parts[0].text;
+                    processedResult.top_flights = processedResult.top_flights.map(flight => {
+                         if (flight.airline) {
+                            // Use the imported utility function here
+                            const fullName = getFullAirlineName(flight.airline);
+                            return { ...flight, airline: fullName };
+                         }
+                         return flight;
+                    });
+                    console.log(`DEBUG: Processed flight results with full names:`, processedResult.top_flights);
+                } catch (e) {
+                    console.error("Error during flight result pre-processing:", e);
+                    processedResult = tr.result;
+                }
+            }
+
+            return `${tr.agent}: ${processedResult.error || JSON.stringify(processedResult)}`;
+
+        }).join("\n\n");
+
+        const finalPrompt = `The user had a travel-related query, and I used tools to get the following information:\n\n${toolResultText}\n\nPlease provide a concise and helpful summary of this information for the user, adhering to the formatting guidelines for flights, accommodations, and sightseeing where applicable.`;
+
+        console.log("DEBUG: Final prompt being sent to geminiModel.generateContent:", finalPrompt);
+
+
+        const response = await geminiModel.generateContent({
+            contents: [{ role: "user", parts: [{ text: finalPrompt }] }]
+        });
+
+        if (response.response?.candidates?.[0]?.content?.parts?.[0]?.text) {
+            return response.response.candidates[0].content.parts[0].text;
+        }
+
+        return "I have processed your travel information.";
+    } catch (error) {
+        console.error("Error generating final response:", error);
+        return "I've gathered the information you requested, but had trouble summarizing it. Here are the key details from your travel query.";
     }
-
-    return "I have processed your travel information.";
-} catch (error) {
-    console.error("Error generating final response:", error);
-    return "I've gathered the information you requested, but had trouble summarizing it. Here are the key details from your travel query.";
-}
 }
 
 function handleChatError(error, conversation, res) {

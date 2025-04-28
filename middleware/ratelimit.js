@@ -3,7 +3,7 @@ const rateLimitStore = {};
 
 // Window settings
 const LIMIT = 10;
-const WINDOW_MS = 60 * 60 * 1000; // 1 hour in milliseconds
+const WINDOW_MS = 60 * 60 * 1000; 
 
 function cleanupOldRequests(ip) {
   const now = Date.now();

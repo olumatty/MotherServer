@@ -8,3 +8,4 @@ dist
 *.local
 *.local.*
 *.local.*
+.node_modules
