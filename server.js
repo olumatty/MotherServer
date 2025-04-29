@@ -7,7 +7,7 @@ const authRouter = require('./routes/auth');
 const motherRouter = require('./routes/mother');
 const chatRouter = require('./routes/chat');
 const cookieParser = require('cookie-parser');
-const {rateLimitMiddleware} = require('./middleware/ratelimit');
+
 
 dotenv.config();
 
@@ -20,9 +20,23 @@ app.use(cookieParser());
 app.use(
   cors({
     origin: 'http://localhost:5173',
-    credentials: true, 
+    credentials: true,
+    preflightContinue: true, 
+    optionsSuccessStatus: 204, 
+    allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'session-id', 'X-User-Gemini-Key'], 
+    origin: function (origin, callback) {
+        console.log(`CORS middleware checking origin: ${origin}`);
+        if (origin === 'http://localhost:5173') { 
+            callback(null, true); 
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    }
   })
 );
+
+// Add a simple log here to confirm middleware setup is reached
+console.log("CORS middleware configured.");
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
