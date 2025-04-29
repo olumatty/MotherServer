@@ -333,11 +333,10 @@ router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
             })
             res.setHeader('X-User-ID', userId);
             res.status(200).json({
-                reply,
                 userId,
                 conversationId,
                 toolResults: toolResults.length > 0 ? toolResults : undefined,
-                messages: conversation.messages
+                messages: conversation.messages.map(msg => msg.toObject ? msg.toObject() : msg) 
             });
         } catch (error) {
             handleChatError(error, conversation, res);
