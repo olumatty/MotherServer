@@ -14,9 +14,10 @@ dotenv.config();
 const app = express();
 const PORT = 8000;
     
+app.use(express.json());
 app.use(cookieParser());
 const corsOrigin ={
-  origin:'http://localhost:5173',
+  origin:'*',
   credentials:true,            
   optionSuccessStatus:204,
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
