@@ -127,9 +127,9 @@ async function callAgentApi(toolName, parameters) {
 
         let response;
         if (toolName === "get_accomodation" || toolName === "get_sightSeeing") {
-            response = await axios.get(agent.endpoint, { params: parameters, timeout: 30000 });
+            response = await axios.get(agent.endpoint, { params: parameters, timeout: 60000 });
         } else {
-            response = await axios.post(agent.endpoint, parameters, { timeout: 30000 });
+            response = await axios.post(agent.endpoint, parameters, { timeout: 60000 });
         }
 
         if (response.status !== 200) {
@@ -333,6 +333,7 @@ router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
             })
             res.setHeader('X-User-ID', userId);
             res.status(200).json({
+                reply,
                 userId,
                 conversationId,
                 toolResults: toolResults.length > 0 ? toolResults : undefined,
@@ -536,7 +537,7 @@ function determineToolExecutionState(messages) {
     if (!messages) return state;
 
     for (const msg of messages) {
-        if (msg.role === "tool" && msg.name === "get_flight_information") {
+        if (msg.role === "tool" || msg.role === "function" && msg.name === "get_flight_information") {
             try {
                 const result = JSON.parse(msg.content);
                 if (!result.error) {
@@ -546,7 +547,7 @@ function determineToolExecutionState(messages) {
             }
         }
 
-        if (msg.role === "tool" && msg.name === "get_accomodation") {
+        if (msg.role === "tool" || msg.role === "function" && msg.name === "get_accomodation") {
             try {
                 const result = JSON.parse(msg.content);
                 if (!result.error) {
@@ -678,7 +679,7 @@ async function processToolCalls(toolCalls, toolExecutionState) {
         result: functionResult || { error: "No result returned from tool" }
     });
 }
-
+console.log("DEBUG: processToolCalls returning toolResults:", JSON.stringify(toolResults, null, 2));
 return toolResults;
 }
 
