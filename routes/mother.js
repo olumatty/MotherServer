@@ -120,16 +120,27 @@ function parseAndValidateDate(dateString) {
 async function callAgentApi(toolName, parameters) {
     try {
         const agent = AGENTS[toolName];
-        if (!agent) {
-            throw new Error(`No agent defined for tool: ${toolName}`);
-        }
+        if (!agent) throw new Error(`No agent defined for tool: ${toolName}`);
         console.log(`Calling ${agent.name} for information...`);
+
+        const retry = async (fn, retries = 3, delay = 2000) => {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    return await fn();
+                } catch (error) {
+                    if (i === retries - 1 || !error.response || error.response.status !== 502) throw error;
+                    console.log(`Retrying ${agent.name} (attempt ${i + 1})...`);
+                    await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+                }
+            }
+        };
 
         let response;
         if (toolName === "get_accomodation" || toolName === "get_sightSeeing") {
-            response = await axios.get(agent.endpoint, { params: parameters, timeout: 60000 });
+            response = await retry(() => axios.get(agent.endpoint, { params: parameters, timeout: 60000 }));
         } else {
-            response = await axios.post(agent.endpoint, parameters, { timeout: 60000 });
+            console.log(`DEBUG: Sending to ${agent.name}:`, JSON.stringify(parameters, null, 2));
+            response = await retry(() => axios.post(agent.endpoint, parameters, { timeout: 60000 }));
         }
 
         if (response.status !== 200) {
@@ -141,10 +152,7 @@ async function callAgentApi(toolName, parameters) {
             };
         }
 
-        return {
-            agent: agent.name,
-            ...response.data
-        };
+        return { agent: agent.name, ...response.data };
     } catch (error) {
         console.error(`Error calling ${AGENTS[toolName]?.name || toolName} API:`, error.message, error.response ? error.response.data : '');
         return {
@@ -156,7 +164,7 @@ async function callAgentApi(toolName, parameters) {
     }
 }
 
-router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
+router.post('/', authenticateToken,  async (req, res) => {
     if (!req.user || !req.user.userId) {
         return res.status(401).json({ message: 'Unauthorized: No user data' });
     }
