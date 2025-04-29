@@ -15,31 +15,14 @@ const app = express();
 const PORT = 8000;
     
 app.use(cookieParser());
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      console.log(`CORS middleware checking origin: ${origin}`);
-      
-      // Allow requests from these origins
-      const allowedOrigins = [
-        'http://localhost:5173',
-      ];
-      
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.log(`Origin "${origin}" not allowed by CORS`);
-        callback(new Error('Not allowed by CORS')); 
-      }
-    },
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'session-id', 'X-User-Gemini-Key'],
-    credentials: true,
-    preflightContinue: true,
-    optionsSuccessStatus: 204,
-  })
-);
+const corsOrigin ={
+  origin:'http://localhost:5173',
+  credentials:true,            
+  optionSuccessStatus:204,
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+}
 
+app.use(cors(corsOrigin));
 console.log("CORS middleware configured.");
 
 mongoose.connect(process.env.MONGO_URI)
