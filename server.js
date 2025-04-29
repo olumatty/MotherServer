@@ -7,6 +7,7 @@ const authRouter = require('./routes/auth');
 const motherRouter = require('./routes/mother');
 const chatRouter = require('./routes/chat');
 const cookieParser = require('cookie-parser');
+const {rateLimitMiddleware} = require('./middleware/ratelimit');
 
 dotenv.config();
 
@@ -37,3 +38,6 @@ app.listen(PORT, () => {
 });
 
 
+//TODO : WORK ON THE RATE LIMITING AND TEST THE API INPUT FRONTEND
+//TODO : WORK ON THE TITLE SLICE AND SUGGESTIONS
+// TODO : DEPLOY TO RENDER.COM

@@ -10,6 +10,7 @@ const Prompt = require('../services/geminiprompt');
 const dotenv = require('dotenv');
 const authenticateToken = require('../middleware/auth');
 const { getFullAirlineName } = require('../util/airlineUtils');
+const {rateLimitMiddleware} = require('../middleware/ratelimit');
 
 dotenv.config();
 
@@ -24,7 +25,7 @@ const AGENTS = {
     },
     get_sightSeeing: {
         name: "Charlie (Sightseeing Agent)",
-        endpoint: process.env.SIGHTSEEING_AGENT_URL || "http://localhost:8003/v1/get_sight_seeing"
+        endpoint: process.env.SIGHTSEEING_AGENT_URL || "https://travelai-sightseeing.onrender.com/v1/get_sight_seeing"
     }
 };
 
@@ -155,7 +156,7 @@ async function callAgentApi(toolName, parameters) {
     }
 }
 
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
     if (!req.user || !req.user.userId) {
         return res.status(401).json({ message: 'Unauthorized: No user data' });
     }
@@ -250,7 +251,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
                 for (const toolResult of toolResults) {
                     conversation.messages.push({
-                        role: "tool",
+                        role: "function",
                         content: typeof toolResult.result === "string" ? toolResult.result : JSON.stringify(toolResult.result || {}),
                         tool_call_id: toolResult.toolCall.id,
                         name: toolResult.toolCall.function.name,
@@ -267,10 +268,10 @@ router.post('/', authenticateToken, async (req, res) => {
                 timestamp: new Date()
             });
 
-            const MIN_MESSAGES_FOR_TITLE = 3;
+            const MIN_MESSAGES_FOR_TITLE = 1;
             const MAX_MESSAGES_TO_CONSIDER_FOR_TITLE = 10;
 
-            const initialTitleFromSlice = conversation.messages[0]?.content?.slice(0, 30);  // Fixed "From" spelling
+            const initialTitleFromSlice = conversation.messages[0]?.content?.slice(0, 30);
             const hasDefaultTitle = conversation.title === "New Chat";
             const needsTitleGeneration = !conversation.title || hasDefaultTitle;
 
@@ -328,7 +329,8 @@ router.post('/', authenticateToken, async (req, res) => {
                 reply,
                 userId,
                 conversationId,
-                toolResults: toolResults.length > 0 ? toolResults : undefined
+                toolResults: toolResults.length > 0 ? toolResults : undefined,
+                messages: conversation.messages
             });
         } catch (error) {
             handleChatError(error, conversation, res);
