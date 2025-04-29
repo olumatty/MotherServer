@@ -324,8 +324,16 @@ router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
                 finalTitle: conversation.title
             });
 
+            console.log("DEBUG: Final response payload:", {
+                reply: reply,
+                userId: userId,
+                conversationId: conversationId,
+                toolResults: toolResults.length > 0 ? toolResults : undefined,
+                messages: conversation.messages.map(msg => ({...msg, _id: undefined})) // Log messages structure
+            })
             res.setHeader('X-User-ID', userId);
             res.status(200).json({
+                reply,
                 userId,
                 conversationId,
                 toolResults: toolResults.length > 0 ? toolResults : undefined,
