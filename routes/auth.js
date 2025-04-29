@@ -37,16 +37,14 @@ router.post('/login', async (req, res) => {
         if (!isMatch) return res.status(401).json({ message: 'Invalid password' });
 
         const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h'});
-        
-        const isProduction = process.env.NODE_ENV === 'production';
-        
+
         res.cookie('token', token, {
             httpOnly: true,
-            secure: isProduction,
-            sameSite: isProduction ? 'None' : 'Lax',
+            secure: true,         // Required for HTTPS (Render)
+            sameSite: 'None',     // Required for cross-site cookies
             path: '/',
-            maxAge: 24 * 60 * 60 * 1000, // 1 day
-        });
+            maxAge: 24 * 60 * 60 * 1000,
+          });
         
         res.status(200).json({ 
             message: 'Login successful', 
