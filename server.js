@@ -14,24 +14,30 @@ dotenv.config();
 const app = express();
 const PORT = 8000;
 
-
-app.use(express.json());
+    
 app.use(cookieParser());
 app.use(
   cors({
-    origin: 'http://localhost:5173',
-    credentials: true,
-    preflightContinue: true, 
-    optionsSuccessStatus: 204, 
-    allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'session-id', 'X-User-Gemini-Key'], 
     origin: function (origin, callback) {
-        console.log(`CORS middleware checking origin: ${origin}`);
-        if (origin === 'http://localhost:5173') { 
-            callback(null, true); 
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    }
+      console.log(`CORS middleware checking origin: ${origin}`);
+      
+      // Allow requests from these origins
+      const allowedOrigins = [
+        'http://localhost:5173',
+      ];
+      
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log(`Origin "${origin}" not allowed by CORS`);
+        callback(new Error('Not allowed by CORS')); 
+      }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'session-id', 'X-User-Gemini-Key'],
+    credentials: true,
+    preflightContinue: true,
+    optionsSuccessStatus: 204,
   })
 );
 

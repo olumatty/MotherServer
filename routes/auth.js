@@ -36,17 +36,26 @@ router.post('/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: 'Invalid password' });
 
-        const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET,{ expiresIn: '1h'});
-        const isSecureRequest = req.secure;
-
+        const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h'});
+        
+        // Determine the environment
+        const isProduction = process.env.NODE_ENV === 'production';
+        
         res.cookie('token', token, {
             httpOnly: true,
-            secure: isSecureRequest, 
-            sameSite: 'Lax',
+            secure: isProduction, // Only use secure in production
+            sameSite: isProduction ? 'None' : 'Lax', // Use 'None' for cross-site in production
             path: '/',
             maxAge: 24 * 60 * 60 * 1000, // 1 day
-          });
-        res.status(200).json({ message: 'Login successful', userId: user.userId, email: user.email, username : user.username });
+        });
+        
+        res.status(200).json({ 
+            message: 'Login successful', 
+            userId: user.userId, 
+            email: user.email, 
+            username: user.username,
+            token: token 
+        });
     } catch (error) {
         res.status(500).json({ message: 'Error logging in', error: error.message });
     }
