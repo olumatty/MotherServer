@@ -13,7 +13,6 @@ dotenv.config();
 
 const app = express();
 const PORT = 8000;
-
     
 app.use(cookieParser());
 app.use(
@@ -41,7 +40,6 @@ app.use(
   })
 );
 
-// Add a simple log here to confirm middleware setup is reached
 console.log("CORS middleware configured.");
 
 mongoose.connect(process.env.MONGO_URI)

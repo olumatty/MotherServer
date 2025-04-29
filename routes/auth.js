@@ -38,13 +38,12 @@ router.post('/login', async (req, res) => {
 
         const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h'});
         
-        // Determine the environment
         const isProduction = process.env.NODE_ENV === 'production';
         
         res.cookie('token', token, {
             httpOnly: true,
-            secure: isProduction, // Only use secure in production
-            sameSite: isProduction ? 'None' : 'Lax', // Use 'None' for cross-site in production
+            secure: isProduction,
+            sameSite: isProduction ? 'None' : 'Lax',
             path: '/',
             maxAge: 24 * 60 * 60 * 1000, // 1 day
         });
