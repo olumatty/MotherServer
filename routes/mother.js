@@ -326,7 +326,6 @@ router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
 
             res.setHeader('X-User-ID', userId);
             res.status(200).json({
-                reply,
                 userId,
                 conversationId,
                 toolResults: toolResults.length > 0 ? toolResults : undefined,
@@ -375,52 +374,150 @@ async function createNewConversation(userId, conversationId, validMessages) {
 }
 
 function loadConversationHistory(conversation) {
+    // Initial checks and logging
     if (!conversation.messages || conversation.messages.length === 0) {
+        console.log("loadConversationHistory: No messages found in conversation history to load.");
         return [];
     }
 
+    console.log("loadConversationHistory: Loading conversation history...");
+    // Log the raw messages from the database (be cautious with logging sensitive info)
+    console.log("loadConversationHistory: Raw messages from DB:", JSON.stringify(conversation.messages.map(msg => ({...msg, _id: undefined})), null, 2)); // Omit _id for cleaner logs
+
+    // Map over messages, filter out system messages, and transform
     return conversation.messages
-        .filter(msg => msg.role !== "system")
+        .filter(msg => msg.role !== "system") // Filter out system messages as they are not part of standard history for interaction turns
         .map(msg => {
-            let historyMessage = { role: "" };
-            switch (msg.role) {
-                case "user":
-                    historyMessage.role = "user";
-                    historyMessage.parts = [{ text: msg.content || "" }];
-                    break;
-                case "assistant":
-                    historyMessage.role = "model";
-                    historyMessage.parts = [{ text: msg.content || "" }];
-                    break;
-                case "tool":
-                    historyMessage.role = "function";
-                    historyMessage.name = msg.name;
-                    // Use parts for function responses to match SDK expectations
-                    historyMessage.parts = [{ text: msg.content || "" }];
-                    break;
-                default:
-                    historyMessage.role = "user";
-                    historyMessage.parts = [{ text: msg.content || "" }];
-            }
+            let historyMessage = null; // Start as null, set if valid message is constructed
 
-            // Ensure parts exists for user and model roles
-            if (historyMessage.role === "user" || historyMessage.role === "model") {
-                if (!historyMessage.parts || !Array.isArray(historyMessage.parts)) {
-                    historyMessage.parts = [{ text: "" }];
+            try {
+                switch (msg.role) {
+                    case "user":
+                        // User messages are simple text parts
+                        if (msg.content && msg.content.trim()) {
+                            historyMessage = {
+                                role: "user",
+                                parts: [{ text: msg.content.trim() }]
+                            };
+                        } else {
+                             console.warn(`loadConversationHistory: Skipping invalid user message (empty content): ${JSON.stringify(msg)}`);
+                        }
+                        break;
+
+                    case "assistant":
+                        let parts = [];
+                        if (msg.content && msg.content.trim()) {
+                             parts.push({ text: msg.content.trim() });
+                        }
+                        if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
+                            for (const toolCall of msg.tool_calls) {
+                                if (toolCall.function && toolCall.function.name && toolCall.function.arguments !== undefined) { // Arguments can be empty object {} or null
+                                    try {
+                                        const args = typeof toolCall.function.arguments === 'string'
+                                            ? JSON.parse(toolCall.function.arguments)
+                                            : toolCall.function.arguments;
+
+                                        parts.push({
+                                            functionCall: {
+                                                name: toolCall.function.name,
+                                                args: args 
+                                            }
+                                        });
+                                    } catch (e) {
+                                        console.error(`loadConversationHistory: Error parsing tool call arguments in assistant message for ${toolCall.function.name}:`, e.message, toolCall.function.arguments);
+                                       
+                                    }
+                                } else {
+                                     console.warn("loadConversationHistory: Skipping invalid tool_call in assistant message (missing name or arguments):", toolCall);
+                                }
+                            }
+                        }
+                        if (parts.length > 0) {
+                            historyMessage = {
+                                role: "model", 
+                                parts: parts
+                            };
+                        } else {
+                             console.warn(`loadConversationHistory: Skipping invalid assistant message (empty content and no valid tool_calls): ${JSON.stringify(msg)}`);
+                        }
+                        break;
+
+                    case "tool": // Handle older messages saved with role "tool" (if any exist in your DB)
+                        // Assume old "tool" messages have name and content (the result)
+                        // Format these as "function" role messages for Gemini history using the functionResponse structure
+                        if (msg.name && msg.content !== undefined) { // Name is required, content could be empty/null result
+                             historyMessage = {
+                                role: "function", // Map old "tool" role to "function" for Gemini history
+                                parts: [{
+                                    functionResponse: {
+                                        name: msg.name, // Use the name from the saved message
+                                        response: {} // Prepare the response field
+                                    }
+                                }]
+                            };
+                            // Attempt to parse content as JSON for the response field
+                            try {
+                                if (typeof msg.content === 'string') {
+                                   historyMessage.parts[0].functionResponse.response = JSON.parse(msg.content);
+                                } else if (typeof msg.content === 'object' && msg.content !== null) {
+                                     // If content is already an object, use it directly
+                                    historyMessage.parts[0].functionResponse.response = msg.content;
+                                } else {
+                                     // If content is not string or object, put it in a simple object
+                                    historyMessage.parts[0].functionResponse.response = { value: msg.content };
+                                }
+
+                            } catch (e) {
+                                 console.warn("loadConversationHistory: Failed to parse old tool message content as JSON for history, using raw:", msg.content);
+                                 historyMessage.parts[0].functionResponse.response = { raw_content: msg.content };
+                            }
+                            if (msg.tool_call_id !== undefined) { 
+                                 historyMessage.tool_call_id = msg.tool_call_id;
+                            }
+
+                        } else {
+                             console.warn(`loadConversationHistory: Skipping invalid old tool message (missing name or content): ${JSON.stringify(msg)}`);
+                        }
+                        break;
+                    case "function": 
+                         if (!msg.name || typeof msg.content === 'undefined' || typeof msg.tool_call_id === 'undefined') {
+                             console.warn(`loadConversationHistory: Skipping invalid function message (missing name, content, or tool_call_id): ${JSON.stringify(msg)}`);
+                             break; 
+                         }
+                        historyMessage = {
+                            role: "function",
+                            parts: [{
+                                functionResponse: {
+                                    name: msg.name, 
+                                    response: {} 
+                                }
+                            }]
+                        };
+                        try {
+                            if (typeof msg.content === 'string') {
+                                historyMessage.parts[0].functionResponse.response = JSON.parse(msg.content);
+                            } else if (typeof msg.content === 'object' && msg.content !== null) {
+                                historyMessage.parts[0].functionResponse.response = msg.content;
+                            } else {
+                                historyMessage.parts[0].functionResponse.response = { value: msg.content };
+                            }
+                        } catch (e) {
+                             console.warn("loadConversationHistory: Failed to parse function message content as JSON for history, using raw string:", msg.content);
+                             historyMessage.parts[0].functionResponse.response = { raw_content: msg.content };
+                        }
+                        historyMessage.tool_call_id = msg.tool_call_id; 
+                        break; 
+                    default: 
+                        console.warn(`loadConversationHistory: Unknown message role in history, skipping: ${msg.role}`, msg);
+                        break; 
                 }
+            } catch (e) {
+                console.error(`loadConversationHistory: Unexpected error processing message with role ${msg.role} for history:`, e, msg);
+                historyMessage = null; 
             }
-
-            // Validate function role
-            if (historyMessage.role === "function") {
-                if (!historyMessage.name || !historyMessage.parts) {
-                    console.warn(`Skipping invalid function message: ${JSON.stringify(msg)}`);
-                    return null; // Skip invalid entries
-                }
-            }
-
             return historyMessage;
         })
-        .filter(msg => msg !== null); // Remove null entries
+        .filter(msg => msg !== null);
 }
 
 function determineToolExecutionState(messages) {
