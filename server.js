@@ -34,11 +34,31 @@ app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/travel', motherRouter);
 app.use('/api/v1/chats',  chatRouter);
 
+
+// Global error handler middleware
+app.use((err, req, res, next) => {
+  console.error("--- Global Error Handler Caught Error ---"); // Prominent log
+  console.error("Error Name:", err.name);
+  console.error("Error Message:", err.message); // Log the error message
+  console.error("Error Stack:", err.stack); // Log the stack trace
+  console.error("Request Method:", req.method);
+  console.error("Request Path:", req.path);
+  console.error("Request Headers:", req.headers);
+  console.error("--- End Global Error Handler ---");
+
+  if (!res.headersSent) {
+      // Send a 500 response if headers haven't been sent by a previous handler
+      res.status(err.status || 500).json({
+          message: err.message || 'An unexpected error occurred',
+          error: err.stack || 'No stack trace available'
+      });
+  }
+
+  // If headers were already sent, delegate to default Express error handler
+  // (though with the final res.status above, this next(err) might not be reached)
+  // next(err);
+});
+
 app.listen(PORT, () => {
     console.log(`The server is running on port ${PORT}`);
 });
-
-
-//TODO : WORK ON THE RATE LIMITING AND TEST THE API INPUT FRONTEND
-//TODO : WORK ON THE TITLE SLICE AND SUGGESTIONS
-// TODO : DEPLOY TO RENDER.COM
