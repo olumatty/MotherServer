@@ -3,7 +3,7 @@ const rateLimitStore = {};
 
 // Window settings
 const LIMIT = 15;
-const WINDOW_MS = 60 * 60 * 1000; 
+const WINDOW_MS = 60 * 60 * 1000;
 
 function cleanupOldRequests(ip) {
   const now = Date.now();
@@ -14,8 +14,9 @@ function cleanupOldRequests(ip) {
 }
 
 function isRateLimited(ip) {
-  // Skip rate limiting for local requests if needed
-  if (ip === 'local') return false;
+  // Skip rate limiting for local requests
+  const localIps = ['127.0.0.1', '::1']; // Check for localhost IPs
+  if (localIps.includes(ip)) return false;
 
   // Clean up expired entries
   cleanupOldRequests(ip);
@@ -26,7 +27,8 @@ function isRateLimited(ip) {
 
 function trackRequest(ip) {
   // Skip tracking for local requests
-  if (ip === 'local') return;
+  const localIps = ['127.0.0.1', '::1']; // Check for localhost IPs
+  if (localIps.includes(ip)) return;
 
   const now = Date.now();
   
@@ -40,10 +42,11 @@ function trackRequest(ip) {
 
 // Express middleware
 function rateLimitMiddleware(req, res, next) {
-  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  const ip = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'unknown';
   
   // Check if rate limited
   if (isRateLimited(ip)) {
+    res.setHeader('Retry-After', Math.ceil(WINDOW_MS / 1000 / 60)); // Retry-After header in minutes
     return res.status(429).json({ 
       error: 'Too many requests', 
       retryAfter: Math.ceil(WINDOW_MS / 1000 / 60) // minutes
@@ -69,7 +72,7 @@ setInterval(() => {
 }, 10 * 60 * 1000); // Clean up every 10 minutes
 
 module.exports = {
-    isRateLimited,
-    trackRequest,
-    rateLimitMiddleware
-  };
+  isRateLimited,
+  trackRequest,
+  rateLimitMiddleware
+};

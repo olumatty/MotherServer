@@ -30,33 +30,46 @@ router.post('/signup', async (req, res) => {
 router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({email });
+        const user = await User.findOne({ email });
         if (!user) return res.status(401).json({ message: 'User not found' });
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: 'Invalid password' });
 
-        const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h'});
+        const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
 
-        res.cookie('token', token, {
+        
+        const refreshToken = jwt.sign({ userId: user.userId }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
+        res.cookie('refreshToken', refreshToken, {
             httpOnly: true, 
             secure: process.env.NODE_ENV === 'production', 
-            sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax', 
+            sameSite: 'None', // Use 'None' if cross-origin, 'Strict' for more security
             path: '/', 
-            maxAge: 24 * 60 * 60 * 1000, 
-          });
-        
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days expiration for refresh token
+        });
+
+        res.cookie('token', token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax',
+            path: '/', 
+            maxAge: 24 * 60 * 60 * 1000, // 1 day expiration
+        });
+
         res.status(200).json({ 
             message: 'Login successful', 
             userId: user.userId, 
             email: user.email, 
             username: user.username,
-            token: token 
+            token: token,
+            refreshToken: refreshToken 
         });
     } catch (error) {
-        res.status(500).json({ message: 'Error logging in', error: error.message });
+        console.error("Login error:", error); 
+        res.status(500).json({ message: 'An error occurred during login. Please try again later.' });
     }
 });
+
 
 router.get('/revalidate', (req, res) => {
     const token = req.cookies.token;

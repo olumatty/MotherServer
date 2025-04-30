@@ -16,14 +16,19 @@ const PORT = 8000;
     
 app.use(express.json());
 app.use(cookieParser());
-const corsOrigin ={
-  origin:'http://localhost:5173',
-  credentials:true,            
-  optionSuccessStatus:204,
-  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-}
-
-app.use(cors(corsOrigin));
+app.use(
+  cors({
+    origin: "https://travelai-nu.vercel.app/",
+    methods: "GET,POST,OPTIONS",
+    allowedHeaders: "Content-Type, Authorization",
+  })
+);
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "https://travelai-nu.vercel.app/");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  next();
+});
 console.log("CORS middleware configured.");
 
 mongoose.connect(process.env.MONGO_URI)
