@@ -25,8 +25,6 @@ app.use(cors({
   optionsSuccessStatus: 204,
 }));
 
-// Handle preflight requests
-app.options('*', cors());
 console.log("CORS middleware configured.");
 
 mongoose.connect(process.env.MONGO_URI)
@@ -51,16 +49,11 @@ app.use((err, req, res, next) => {
   console.error("--- End Global Error Handler ---");
 
   if (!res.headersSent) {
-      // Send a 500 response if headers haven't been sent by a previous handler
       res.status(err.status || 500).json({
           message: err.message || 'An unexpected error occurred',
           error: err.stack || 'No stack trace available'
       });
   }
-
-  // If headers were already sent, delegate to default Express error handler
-  // (though with the final res.status above, this next(err) might not be reached)
-  // next(err);
 });
 
 app.get('/api/v1/health', (req, res) => {
