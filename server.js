@@ -61,6 +61,10 @@ app.use((err, req, res, next) => {
   // next(err);
 });
 
+app.get('/api/v1/health', (req, res) => {
+  res.status(200).json({ status: 'OK', server: 'travelai', uptime: process.uptime() });
+});
+
 app.listen(PORT, () => {
     console.log(`The server is running on port ${PORT}`);
 });
