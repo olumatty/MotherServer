@@ -19,7 +19,7 @@ app.use(cookieParser());
 app.use(cors({
   origin: 'https://travelai-nu.vercel.app', 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'user-token','conversationId','x-user-gemini-key',],
+  allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'user-token','conversationId','x-user-gemini-key', 'session-id',],
   credentials: true, 
   preflightContinue: false, 
   optionsSuccessStatus: 204, 

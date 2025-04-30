@@ -92,7 +92,7 @@ async function callAgentApi(toolName, parameters) {
         if (!agent) throw new Error(`No agent defined for tool: ${toolName}`);
         console.log(`Calling ${agent.name} for information...`);
 
-        const retry = async (fn, retries = 3, delay = 2000) => {
+        const retry = async (fn, retries = 3, delay = 5000) => {
             for (let i = 0; i < retries; i++) {
                 try {
                     return await fn();
@@ -106,7 +106,7 @@ async function callAgentApi(toolName, parameters) {
 
         let response;
         if (toolName === "get_accomodation" || toolName === "get_sightSeeing") {
-            response = await retry(() => axios.get(agent.endpoint, { params: parameters, timeout: 60000 }));
+            response = await retry(() => axios.get(agent.endpoint, { params: parameters, timeout: 90000 }));
         } else {
             console.log(`DEBUG: Sending to ${agent.name}:`, JSON.stringify(parameters, null, 2));
             response = await retry(() => axios.post(agent.endpoint, parameters, {
