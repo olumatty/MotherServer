@@ -2,7 +2,7 @@
 const rateLimitStore = {};
 
 // Window settings
-const LIMIT = 10;
+const LIMIT = 15;
 const WINDOW_MS = 60 * 60 * 1000; 
 
 function cleanupOldRequests(ip) {

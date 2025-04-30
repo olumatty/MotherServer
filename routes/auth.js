@@ -39,11 +39,11 @@ router.post('/login', async (req, res) => {
         const token = jwt.sign({ userId: user.userId }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h'});
 
         res.cookie('token', token, {
-            httpOnly: true,
-            secure: true,         // Required for HTTPS (Render)
-            sameSite: 'None',     // Required for cross-site cookies
-            path: '/',
-            maxAge: 24 * 60 * 60 * 1000,
+            httpOnly: true, 
+            secure: process.env.NODE_ENV === 'production', 
+            sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax', 
+            path: '/', 
+            maxAge: 24 * 60 * 60 * 1000, 
           });
         
         res.status(200).json({ 

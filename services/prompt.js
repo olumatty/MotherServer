@@ -86,8 +86,7 @@ markdown
 **Price**: $[Price]  
 **Provider**: [Provider Name]  
 **Rating**: [Rating]  
-**Link**: [Link](urlTemplate)  
-**Image**: ![Hotel Image](photourlTemplate)  
+**Link**: [Link](urlTemplate)   
 
 ---
 

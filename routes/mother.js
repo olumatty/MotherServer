@@ -136,7 +136,7 @@ async function callAgentApi(toolName, parameters) {
     }
 }
 
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
     if (!req.user || !req.user.userId) {
         return res.status(401).json({ message: 'Unauthorized: No user data' });
     }
