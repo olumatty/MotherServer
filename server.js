@@ -19,8 +19,10 @@ app.use(cookieParser());
 app.use(cors({
   origin: 'https://travelai-nu.vercel.app', 
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'user-token','conversationId','x-user-gemini-key',],
   credentials: true, 
+  preflightContinue: false, 
+  optionsSuccessStatus: 204, 
 }));
 
 console.log("CORS middleware configured.");
