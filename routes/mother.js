@@ -317,11 +317,7 @@ router.post('/', authenticateToken, rateLimitMiddleware, async (req, res) => {
                 reply,
                 conversationId,
                 userId,
-                toolResults: toolResults.map(tr => ({
-                    agent: tr.agent,
-                    toolCall: tr.toolCall,
-                    result: tr.result // Raw result for frontend logic, but UI should use reply
-                }))
+                
             });
         } catch (error) {
             handleChatError(error, conversation, res);
@@ -672,57 +668,74 @@ async function generateFinalResponse(geminiModel, toolResults) {
         console.log("DEBUG: toolResults received in generateFinalResponse:", JSON.stringify(toolResults, null, 2));
 
         let toolResultText = toolResults.map(tr => {
-            console.log(`DEBUG: Processing result for agent ${tr.agent}:`, tr.result);
+            console.log(`DEBUG: Processing result for agent ${tr.agent} for toolResultText:`, tr.result);
 
             let processedResult = tr.result;
+
             if (tr.agent === "Alice (Flight Agent)" && processedResult && processedResult.top_flights) {
                 try {
                     processedResult = JSON.parse(JSON.stringify(tr.result));
-                    processedResult.top_flights = processedResult.top_flights.map(flight => {
-                        if (flight.airline) {
+                    if (processedResult.top_flights) {
+                        
+                        processedResult.top_flights = processedResult.top_flights.map(flight => {
+                          
                             const fullName = getFullAirlineName(flight.airline);
                             return { ...flight, airline: fullName };
-                        }
-                        return flight;
-                    });
-                    console.log(`DEBUG: Processed flight results with full names:`, processedResult.top_flights);
+                        });
+                        console.log(`DEBUG: Processed flight results with full names for toolResultText:`, processedResult.top_flights);
+                    }
                 } catch (e) {
-                    console.error("Error during flight result pre-processing:", e);
-                    processedResult = tr.result;
+                    console.error("Error during flight result pre-processing for toolResultText:", e);
+                    processedResult = tr.result; 
                 }
             }
-
-            // Format result for Gemini prompt
+            
             if (processedResult.error) {
                 return `${tr.agent}: Error - ${processedResult.error}. Details: ${processedResult.message || processedResult.details || 'No details available'}`;
-            } else if (tr.agent === "Alice (Flight Agent)") {
-                if (processedResult.top_flights.length === 0) {
-                    return `${tr.agent}: No flights found for ${processedResult.extractedInfo.originLocationCode} to ${processedResult.extractedInfo.destinationLocationCode} on ${processedResult.extractedInfo.departureDate} in ${processedResult.extractedInfo.travelClass}.`;
-                }
-                const flightDetails = processedResult.top_flights.map(f => 
-                    `Flight by ${f.airline}, Price: ${f.currency} ${f.price}, Departure: ${f.departureDate} ${f.departureTime}, Duration: ${f.duration}, Stops: ${f.stops}`
-                ).join("; ");
-                return `${tr.agent}: Found ${processedResult.top_flights.length} flights: ${flightDetails}`;
-            } else {
-                return `${tr.agent}: ${JSON.stringify(processedResult)}`;
             }
+            else if (tr.agent === "Alice (Flight Agent)") {
+                if (processedResult.top_flights && processedResult.top_flights.length > 0) {
+                   
+                    let flightMarkdown = "Here are some flight options:\n\n";
+                    processedResult.top_flights.forEach(f => {
+                        flightMarkdown += `**Airline**: **${f.airline}**\n`; // f.airline is now the full name
+                        flightMarkdown += `**Price** (EUR): ${f.currency} ${f.price}\n`; // Use currency and price from the flight object
+                        flightMarkdown += `**Departure Time** (UTC+1): **${f.departureTime}**\n`;
+                        flightMarkdown += `**Departure Date**: **${f.departureDate}**\n`;
+                        flightMarkdown += `**Duration**: **${f.duration}**\n`;
+                        flightMarkdown += `**Stops**: **${f.stops}**\n`;
+                        flightMarkdown += `---\n\n`;
+                    });
+                    return flightMarkdown;
+                } else {
+                     const info = processedResult.extractedInfo;
+                     const origin = info?.originLocationCode || 'N/A';
+                     const dest = info?.destinationLocationCode || 'N/A';
+                     const date = info?.departureDate || 'N/A';
+                     return `${tr.agent}: No flights found for ${origin} to ${dest} on ${date}.`;
+                }
+            }
+            else {
+                 return `${tr.agent}: ${JSON.stringify(processedResult)}`;
+            }
+
         }).join("\n\n");
 
-        const finalPrompt = `You are a travel assistant. Based on the following information from tools, provide a concise, user-friendly summary for the user. Do not include raw JSON, technical details, or phrases like "Information from Alice received successfully." If no flights are found, suggest next steps (e.g., try different dates or contact support). Information:\n\n${toolResultText}\n\nSummary:`;
+        const finalPrompt = `You are a travel assistant. Information from tool results is provided below. Present this information to the user in a user-friendly way. If the information includes lists or formatted blocks (like Markdown), present those as is. Do not add extra commentary about processing or technical details. If the information indicates no results were found, state that clearly. Information:\n\n${toolResultText}\n\nResponse:`;
 
-        console.log("DEBUG: Final prompt for Gemini:", finalPrompt);
+        console.log("DEBUG: Final prompt for Gemini (Presenting Info):", finalPrompt);
 
         const response = await geminiModel.generateContent({
             contents: [{ role: "user", parts: [{ text: finalPrompt }] }]
         });
-
         if (response.response?.candidates?.[0]?.content?.parts?.[0]?.text) {
             return response.response.candidates[0].content.parts[0].text;
         }
-
         return "I have processed your travel request, but couldn't generate a summary. Please try again.";
+
     } catch (error) {
         console.error("Error generating final response:", error);
+        // Keep your original catch block message for errors occurring within this function.
         return "Sorry, I encountered an issue while summarizing your travel request. Please try again or contact support.";
     }
 }
